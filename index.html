@@ -186,6 +186,78 @@ h1 { font-size: 24px; font-weight: 900; color: var(--gold); }
 
 /* Results title */
 .results-title { font-weight: 700; color: var(--gold); margin-bottom: 14px; font-size: 15px; }
+
+/* Approval form */
+.approval-card {
+  background: rgba(201,168,76,0.07);
+  border: 2px solid rgba(201,168,76,0.35);
+  border-radius: 16px;
+  padding: 18px;
+  margin-bottom: 14px;
+}
+.approval-title { color: var(--gold); font-weight: 800; font-size: 16px; margin-bottom: 14px; }
+.field-group { margin-bottom: 12px; }
+.field-label { color: rgba(255,255,255,0.5); font-size: 12px; margin-bottom: 4px; }
+.field-input {
+  width: 100%;
+  background: rgba(0,0,0,0.3);
+  border: 1px solid rgba(255,255,255,0.15);
+  border-radius: 8px;
+  padding: 10px 12px;
+  color: #fff;
+  font-size: 14px;
+  font-family: 'Heebo', sans-serif;
+  direction: rtl;
+}
+.field-input:focus { outline: none; border-color: var(--gold); }
+.field-select {
+  width: 100%;
+  background: rgba(0,0,0,0.3);
+  border: 1px solid rgba(255,255,255,0.15);
+  border-radius: 8px;
+  padding: 10px 12px;
+  color: #fff;
+  font-size: 14px;
+  font-family: 'Heebo', sans-serif;
+  direction: rtl;
+  appearance: none;
+}
+.btn-approve {
+  width: 100%;
+  background: linear-gradient(135deg, #52b788, #2d6a4f);
+  color: #fff;
+  border: none;
+  border-radius: 10px;
+  padding: 14px;
+  font-family: 'Heebo', sans-serif;
+  font-weight: 800;
+  font-size: 16px;
+  cursor: pointer;
+  margin-bottom: 8px;
+}
+.btn-approve:hover { opacity: 0.9; }
+.btn-download-only {
+  width: 100%;
+  background: rgba(255,255,255,0.08);
+  color: rgba(255,255,255,0.6);
+  border: 1px solid rgba(255,255,255,0.15);
+  border-radius: 10px;
+  padding: 11px;
+  font-family: 'Heebo', sans-serif;
+  font-weight: 600;
+  font-size: 14px;
+  cursor: pointer;
+}
+.sync-success {
+  background: rgba(82,183,136,0.12);
+  border: 1px solid rgba(82,183,136,0.35);
+  border-radius: 10px;
+  padding: 12px;
+  font-size: 13px;
+  color: #52b788;
+  text-align: center;
+  margin-top: 8px;
+}
 </style>
 </head>
 <body>
@@ -469,67 +541,181 @@ async function processFiles(files) {
   renderResults(results);
 }
 
+// ---- Sync to luria-farm localStorage ----
+function syncToLuriaFarm(info, docType) {
+  try {
+    const loadF = k => { try { return JSON.parse(localStorage.getItem(k)||'[]'); } catch { return []; } };
+    const saveF = (k,v) => localStorage.setItem(k, JSON.stringify(v));
+
+    const date = info.date || '';
+    const [year, month] = date.split('-');
+    const sup = info.supplier || '';
+    const num = info.docNumber || '';
+    const total = parseFloat((info.amount||'0').replace(/[^\d.]/g,'')) || 0;
+
+    if (docType === 'חשבונית מס' || docType === 'חשבונית זיכוי') {
+      const invs = loadF('li2');
+      const exists = invs.find(x => x.num === num && x.sup === sup);
+      if (!exists) {
+        invs.push({
+          id: Date.now(),
+          num, date, sup,
+          month: month||'',
+          year: year||'',
+          total: docType === 'חשבונית זיכוי' ? -Math.abs(total) : total,
+          docIds: [],
+          direct: true,
+          directItems: [],
+          paid: false,
+          paidDate: '',
+          _fromInvoiceSorter: true
+        });
+        saveF('li2', invs);
+      }
+      return !exists;
+    }
+
+    if (docType === 'תעודת משלוח') {
+      const dels = loadF('ld2');
+      const exists = dels.find(x => String(x.doc) === String(num) && x.sup === sup);
+      if (!exists) {
+        dels.push({
+          id: Date.now() + Math.random(),
+          sup, doc: num, date,
+          month: month||'',
+          year: year||'',
+          total,
+          items: [{desc: 'מיון חשבוניות אוטומטי', qty:1, price: total, unit:''}],
+          invNum: '',
+          ts: Date.now(),
+          _fromInvoiceSorter: true
+        });
+        saveF('ld2', dels);
+      }
+      return !exists;
+    }
+
+    return false;
+  } catch(e) {
+    console.error('sync error', e);
+    return false;
+  }
+}
+
+function renderApprovalCard(r, index) {
+  const info = r.info || {};
+  const card = document.createElement('div');
+  card.className = 'approval-card';
+  card.id = `card-${index}`;
+
+  const supplierOptions = ['עמיר','המשביר','ICL','דשנים'].map(s =>
+    `<option value="${s}" ${(info.knownSupplier||info.supplier)===s?'selected':''}>${s}</option>`
+  ).join('');
+
+  const docTypeOptions = ['חשבונית מס','תעודת משלוח','חשבונית זיכוי','הצעת מחיר'].map(t =>
+    `<option value="${t}" ${info.docType===t?'selected':''}>${t}</option>`
+  ).join('');
+
+  card.innerHTML = `
+    <div class="approval-title">✅ אשר ושמור — ${r.file.name}</div>
+
+    ${r.isUnknown && info.supplier ? `
+    <div class="unknown-alert" style="margin-bottom:12px">
+      ⚠️ ספק לא מוכר: "${info.supplier}"<br>
+      צור תיקייה: <code>חשבוניות/${info.supplier}</code>
+    </div>` : ''}
+
+    <div class="field-group">
+      <div class="field-label">ספק</div>
+      <select class="field-select" id="f-sup-${index}">
+        ${supplierOptions}
+        ${!info.knownSupplier && info.supplier ? `<option value="${info.supplier}" selected>${info.supplier}</option>` : ''}
+      </select>
+    </div>
+
+    <div class="field-group">
+      <div class="field-label">סוג מסמך</div>
+      <select class="field-select" id="f-type-${index}">${docTypeOptions}</select>
+    </div>
+
+    <div class="field-group">
+      <div class="field-label">מספר מסמך</div>
+      <input class="field-input" id="f-num-${index}" value="${info.docNumber||''}">
+    </div>
+
+    <div class="field-group">
+      <div class="field-label">תאריך (YYYY-MM-DD)</div>
+      <input class="field-input" id="f-date-${index}" value="${info.date||''}" dir="ltr">
+    </div>
+
+    <div class="field-group">
+      <div class="field-label">סכום כולל מע"מ (₪)</div>
+      <input class="field-input" id="f-amount-${index}" value="${info.amount||''}" type="number" dir="ltr">
+    </div>
+
+    <div class="save-box" style="margin-bottom:12px">
+      <div class="save-label">📁 יישמר ב:</div>
+      <div class="save-path" id="f-path-${index}">חשבוניות/${info.knownSupplier||info.supplier||'?'}</div>
+      <div class="save-filename">${r.fileName}</div>
+    </div>
+
+    <button class="btn-approve" onclick="approveAndSync(${index})">
+      ✅ אשר — שמור במערכת ובתיקייה
+    </button>
+    <button class="btn-download-only" onclick="downloadOnly(${index})">
+      ⬇️ הורד בלבד (ללא שמירה במערכת)
+    </button>
+    <div id="sync-result-${index}"></div>
+  `;
+  return card;
+}
+
+// Global results store
+let _results = [];
+
+function approveAndSync(index) {
+  const r = _results[index];
+  const sup = document.getElementById(`f-sup-${index}`).value;
+  const docType = document.getElementById(`f-type-${index}`).value;
+  const num = document.getElementById(`f-num-${index}`).value;
+  const date = document.getElementById(`f-date-${index}`).value;
+  const amount = document.getElementById(`f-amount-${index}`).value;
+
+  const finalInfo = { ...r.info, supplier: sup, knownSupplier: ['עמיר','המשביר','ICL','דשנים'].includes(sup)?sup:null, docType, docNumber: num, date, amount };
+  const fileName = `${sup}_${date}_${docType}_${num}.pdf`.replace(/\s+/g,'_');
+
+  // Download with new name
+  const url = URL.createObjectURL(r.file);
+  const a = document.createElement('a');
+  a.href = url; a.download = fileName; a.click();
+  URL.revokeObjectURL(url);
+
+  // Sync to luria-farm
+  const synced = syncToLuriaFarm(finalInfo, docType);
+  const resultDiv = document.getElementById(`sync-result-${index}`);
+  resultDiv.innerHTML = synced
+    ? `<div class="sync-success">✅ נשמר במערכת ההוצאות ונורד לתיקייה חשבוניות/${sup}</div>`
+    : `<div class="sync-success" style="color:var(--gold)">⚠️ כבר קיים במערכת — הורד בלבד</div>`;
+
+  // Disable buttons
+  document.getElementById(`card-${index}`).querySelectorAll('button').forEach(b => b.disabled = true);
+}
+
+function downloadOnly(index) {
+  const r = _results[index];
+  const url = URL.createObjectURL(r.file);
+  const a = document.createElement('a');
+  a.href = url; a.download = r.fileName; a.click();
+  URL.revokeObjectURL(url);
+}
+
 function renderResults(results) {
-  resultsTitle.textContent = `תוצאות — ${results.length} מסמך${results.length > 1 ? 'ים' : ''}`;
+  _results = results;
+  resultsTitle.textContent = `${results.length} מסמך${results.length > 1 ? 'ים' : ''} — בדוק ואשר`;
   resultsList.innerHTML = '';
-
-  results.forEach(r => {
-    const card = document.createElement('div');
-    card.className = `result-card ${r.isError ? 'error' : r.isUnknown ? 'unknown' : 'known'}`;
-
-    const badgeClass = r.isUnknown ? 'unknown' : 'known';
-    const badgeText = r.isError
-      ? '❌ שגיאה'
-      : r.isUnknown
-        ? `⚠️ ספק לא מזוהה`
-        : `✅ ${r.info.knownSupplier}`;
-
-    const infoGrid = r.info ? `
-      <div class="info-grid">
-        <div><span class="info-label">ספק: </span><span class="info-value">${r.info.supplier || '—'}</span></div>
-        <div><span class="info-label">סוג: </span><span class="info-value">${r.info.docType || '—'}</span></div>
-        <div><span class="info-label">מספר: </span><span class="info-value">${r.info.docNumber || '—'}</span></div>
-        <div><span class="info-label">סכום: </span><span class="info-value">${r.info.amount ? '₪' + r.info.amount : '—'}</span></div>
-        <div><span class="info-label">תאריך: </span><span class="info-value">${r.info.date || '—'}</span></div>
-      </div>` : '';
-
-    const unknownAlert = r.isUnknown && r.info?.supplier ? `
-      <div class="unknown-alert">
-        <strong>⚠️ ספק לא מוכר: "${r.info.supplier}"</strong><br>
-        צור תיקייה חדשה:<br>
-        <code>חשבוניות/${r.info.supplier}</code>
-      </div>` : '';
-
-    const saveBox = `
-      <div class="save-box">
-        <div class="save-label">📁 שמור ב:</div>
-        <div class="save-path">${r.folderPath || 'לא ידוע'}</div>
-        <div class="save-filename">${r.fileName}</div>
-      </div>`;
-
-    card.innerHTML = `
-      <div class="card-header">
-        <span class="supplier-badge ${badgeClass}">${badgeText}</span>
-        <span class="orig-name">${r.file.name}</span>
-      </div>
-      ${infoGrid}
-      ${unknownAlert}
-      ${saveBox}
-      <button class="btn-download">⬇️ הורד עם שם מסודר</button>
-    `;
-
-    card.querySelector('.btn-download').addEventListener('click', () => {
-      const url = URL.createObjectURL(r.file);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = r.fileName;
-      a.click();
-      URL.revokeObjectURL(url);
-    });
-
-    resultsList.appendChild(card);
+  results.forEach((r, i) => {
+    resultsList.appendChild(renderApprovalCard(r, i));
   });
-
   resultsSection.style.display = 'block';
 }
 </script>
