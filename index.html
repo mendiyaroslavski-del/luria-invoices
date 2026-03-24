@@ -262,10 +262,10 @@ const KNOWN_SUPPLIERS = ['עמיר', 'המשביר', 'ICL', 'דשנים'];
 
 // API Key from localStorage
 function getApiKey() {
-  return localStorage.getItem('anthropic_api_key') || '';
+  return localStorage.getItem('luria_api_key') || '';
 }
 function saveApiKey(key) {
-  localStorage.setItem('anthropic_api_key', key);
+  localStorage.setItem('luria_api_key', key);
 }
 
 // Fallback: detect supplier from filename
