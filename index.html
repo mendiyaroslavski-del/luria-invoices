@@ -1,0 +1,537 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>מיון חשבוניות — לוריא</title>
+<meta name="theme-color" content="#0f2118">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="חשבוניות">
+<link rel="manifest" href="manifest.json">
+<link href="https://fonts.googleapis.com/css2?family=Heebo:wght@300;400;500;700;900&display=swap" rel="stylesheet">
+<style>
+:root {
+  --deep: #0f2118;
+  --forest: #1a3d2b;
+  --mid: #2d6a4f;
+  --light: #52b788;
+  --gold: #c9a84c;
+  --gold-light: #f5e6c3;
+  --red: #f87171;
+  --white: #ffffff;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  font-family: 'Heebo', sans-serif;
+  background: var(--deep);
+  color: var(--white);
+  min-height: 100vh;
+  direction: rtl;
+  padding: 24px 16px 48px;
+}
+h1 { font-size: 24px; font-weight: 900; color: var(--gold); }
+.subtitle { color: rgba(255,255,255,0.45); font-size: 14px; margin-top: 4px; }
+
+/* Header */
+.header { text-align: center; margin-bottom: 28px; }
+.header-icon { font-size: 44px; margin-bottom: 8px; }
+.back-link {
+  display: inline-block;
+  color: rgba(255,255,255,0.4);
+  font-size: 13px;
+  text-decoration: none;
+  margin-bottom: 16px;
+}
+.back-link:hover { color: var(--gold); }
+
+/* Folder guide */
+.folder-guide {
+  background: rgba(201,168,76,0.07);
+  border: 1px solid rgba(201,168,76,0.2);
+  border-radius: 14px;
+  padding: 16px;
+  margin-bottom: 20px;
+  font-size: 13px;
+}
+.folder-guide-title { color: var(--gold); font-weight: 700; margin-bottom: 10px; }
+.folder-item { color: rgba(255,255,255,0.65); line-height: 2; }
+.folder-item span { color: var(--red); }
+
+/* Drop zone */
+.drop-zone {
+  border: 2px dashed rgba(255,255,255,0.15);
+  border-radius: 16px;
+  padding: 44px 20px;
+  text-align: center;
+  cursor: pointer;
+  background: rgba(255,255,255,0.03);
+  transition: all 0.2s;
+  margin-bottom: 20px;
+  position: relative;
+}
+.drop-zone.dragging, .drop-zone:hover {
+  border-color: var(--gold);
+  background: rgba(201,168,76,0.06);
+}
+.drop-zone input { display: none; }
+.drop-icon { font-size: 40px; margin-bottom: 12px; }
+.drop-title { font-weight: 700; font-size: 16px; }
+.drop-sub { color: rgba(255,255,255,0.35); font-size: 13px; margin-top: 6px; }
+
+/* Shared file banner */
+.shared-banner {
+  background: rgba(82,183,136,0.12);
+  border: 1px solid rgba(82,183,136,0.35);
+  border-radius: 12px;
+  padding: 14px 16px;
+  margin-bottom: 20px;
+  font-size: 14px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.shared-banner .icon { font-size: 24px; }
+
+/* Processing */
+.processing {
+  text-align: center;
+  padding: 40px 20px;
+  background: rgba(255,255,255,0.04);
+  border-radius: 16px;
+  margin-bottom: 20px;
+}
+.processing .spin { font-size: 40px; animation: spin 1.2s linear infinite; display: inline-block; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.processing-title { font-weight: 700; margin-top: 14px; font-size: 16px; }
+.processing-sub { color: rgba(255,255,255,0.4); font-size: 13px; margin-top: 4px; }
+
+/* Result card */
+.result-card {
+  border-radius: 14px;
+  padding: 16px;
+  margin-bottom: 14px;
+}
+.result-card.known {
+  background: rgba(82,183,136,0.07);
+  border: 1px solid rgba(82,183,136,0.25);
+}
+.result-card.unknown {
+  background: rgba(248,113,113,0.07);
+  border: 1px solid rgba(248,113,113,0.3);
+}
+.result-card.error {
+  background: rgba(248,113,113,0.05);
+  border: 1px solid rgba(248,113,113,0.2);
+}
+.card-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
+.supplier-badge {
+  display: inline-block;
+  border-radius: 20px;
+  padding: 3px 12px;
+  font-size: 13px;
+  font-weight: 700;
+  color: #fff;
+}
+.supplier-badge.known { background: var(--mid); }
+.supplier-badge.unknown { background: var(--red); }
+.orig-name { color: rgba(255,255,255,0.3); font-size: 11px; max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.info-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 12px; font-size: 13px; }
+.info-label { color: rgba(255,255,255,0.4); }
+.info-value { font-weight: 600; }
+
+.unknown-alert {
+  background: rgba(248,113,113,0.1);
+  border: 1px solid rgba(248,113,113,0.35);
+  border-radius: 8px;
+  padding: 10px 12px;
+  font-size: 13px;
+  margin-bottom: 12px;
+  line-height: 1.7;
+}
+.unknown-alert code {
+  background: rgba(0,0,0,0.35);
+  padding: 1px 7px;
+  border-radius: 4px;
+  font-family: monospace;
+  direction: ltr;
+  display: inline-block;
+}
+
+.save-box {
+  background: rgba(0,0,0,0.2);
+  border-radius: 8px;
+  padding: 10px 12px;
+  margin-bottom: 12px;
+}
+.save-label { color: rgba(255,255,255,0.4); font-size: 12px; margin-bottom: 3px; }
+.save-path { color: var(--gold); font-weight: 700; font-size: 14px; }
+.save-filename { color: rgba(255,255,255,0.55); font-size: 11px; margin-top: 6px; word-break: break-all; direction: ltr; }
+
+.btn-download {
+  width: 100%;
+  background: linear-gradient(135deg, var(--gold), var(--gold-light));
+  color: var(--deep);
+  border: none;
+  border-radius: 10px;
+  padding: 13px;
+  font-family: 'Heebo', sans-serif;
+  font-weight: 800;
+  font-size: 15px;
+  cursor: pointer;
+  transition: opacity 0.2s;
+}
+.btn-download:hover { opacity: 0.9; }
+
+/* Results title */
+.results-title { font-weight: 700; color: var(--gold); margin-bottom: 14px; font-size: 15px; }
+</style>
+</head>
+<body>
+
+<a href="https://mendiyaroslavski-del.github.io/luria-home/" class="back-link">← חזרה לפורטל</a>
+
+<div class="header">
+  <div class="header-icon">📂</div>
+  <h1>מיון חשבוניות</h1>
+  <p class="subtitle">העלה PDF — המערכת תזהה ותגיד לאן לשמור</p>
+</div>
+
+<!-- Folder structure guide -->
+<div class="folder-guide">
+  <div class="folder-guide-title">📱 מבנה תיקיות בטלפון:</div>
+  <div class="folder-item">📁 חשבוניות / <strong>עמיר</strong></div>
+  <div class="folder-item">📁 חשבוניות / <strong>המשביר</strong></div>
+  <div class="folder-item">📁 חשבוניות / <strong>ICL</strong></div>
+  <div class="folder-item">📁 חשבוניות / <strong>דשנים</strong></div>
+  <div class="folder-item">📁 חשבוניות / <span>ספק חדש — תיצור לפי הצורך</span></div>
+</div>
+
+<!-- Shared file banner (shown when opened via share) -->
+<div class="shared-banner" id="sharedBanner" style="display:none">
+  <span class="icon">📨</span>
+  <div>
+    <strong>קובץ התקבל ממייל!</strong><br>
+    <span style="color:rgba(255,255,255,0.5);font-size:13px">מנתח את החשבונית...</span>
+  </div>
+</div>
+
+<!-- API Key Box -->
+<div class="folder-guide" id="apiKeyBox">
+  <div class="folder-guide-title">🔑 מפתח API של Anthropic</div>
+  <div style="color:rgba(255,255,255,0.5);font-size:12px;margin-bottom:10px;">
+    נדרש לניתוח חשבוניות אוטומטי
+  </div>
+  <div style="display:flex;gap:8px;align-items:center;">
+    <input type="password" id="apiKeyInput" placeholder="sk-ant-api03-..." style="
+      flex:1; background:rgba(0,0,0,0.3); border:1px solid rgba(255,255,255,0.15);
+      border-radius:8px; padding:10px 12px; color:#fff; font-size:13px;
+      font-family:'Heebo',sans-serif; direction:ltr;
+    ">
+    <button onclick="handleSaveKey()" style="
+      background:var(--gold); color:var(--deep); border:none; border-radius:8px;
+      padding:10px 16px; font-family:'Heebo',sans-serif; font-weight:700;
+      font-size:13px; cursor:pointer; white-space:nowrap;
+    ">שמור</button>
+  </div>
+  <div id="keyStatus" style="margin-top:8px;font-size:12px;"></div>
+</div>
+<div class="drop-zone" id="dropZone">
+  <input type="file" id="fileInput" accept="application/pdf" multiple>
+  <div class="drop-icon">📄</div>
+  <div class="drop-title">לחץ להעלאת PDF</div>
+  <div class="drop-sub">או גרור לכאן • ניתן מספר קבצים</div>
+</div>
+
+<!-- Processing -->
+<div class="processing" id="processing" style="display:none">
+  <div class="spin">⚙️</div>
+  <div class="processing-title">מנתח חשבוניות...</div>
+  <div class="processing-sub">Claude קורא את המסמכים</div>
+</div>
+
+<!-- Results -->
+<div id="resultsSection" style="display:none">
+  <div class="results-title" id="resultsTitle"></div>
+  <div id="resultsList"></div>
+</div>
+
+<script>
+const KNOWN_SUPPLIERS = ['עמיר', 'המשביר', 'ICL', 'דשנים'];
+
+// API Key from localStorage
+function getApiKey() {
+  return localStorage.getItem('anthropic_api_key') || '';
+}
+function saveApiKey(key) {
+  localStorage.setItem('anthropic_api_key', key);
+}
+
+// Fallback: detect supplier from filename
+function detectFromFilename(filename) {
+  const name = filename.toLowerCase();
+  if (name.includes('עמיר') || name.includes('amir')) return 'עמיר';
+  if (name.includes('משביר') || name.includes('mashbir')) return 'המשביר';
+  if (name.includes('icl') || name.includes('דשנים')) return 'ICL';
+  if (name.includes('dashanim') || name.includes('דשן')) return 'דשנים';
+  return null;
+}
+
+// ---- UI refs ----
+const dropZone = document.getElementById('dropZone');
+const fileInput = document.getElementById('fileInput');
+const processing = document.getElementById('processing');
+const resultsSection = document.getElementById('resultsSection');
+const resultsList = document.getElementById('resultsList');
+const resultsTitle = document.getElementById('resultsTitle');
+const sharedBanner = document.getElementById('sharedBanner');
+
+function handleSaveKey() {
+  const input = document.getElementById('apiKeyInput');
+  const key = input.value.trim();
+  if (!key.startsWith('sk-ant-')) {
+    document.getElementById('keyStatus').innerHTML = '<span style="color:#f87171">❌ מפתח לא תקין</span>';
+    return;
+  }
+  saveApiKey(key);
+  input.value = '';
+  updateKeyStatus();
+}
+
+function updateKeyStatus() {
+  const key = getApiKey();
+  const status = document.getElementById('keyStatus');
+  const input = document.getElementById('apiKeyInput');
+  if (key) {
+    status.innerHTML = '✅ <span style="color:#52b788">מפתח שמור</span>';
+    input.placeholder = '••••••••••••••••••••';
+  } else {
+    status.innerHTML = '<span style="color:#f87171">⚠️ לא הוגדר מפתח — ניתוח לא יעבוד</span>';
+  }
+}
+
+// ---- Service worker ----
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', async () => {
+    updateKeyStatus();
+    await navigator.serviceWorker.register('sw.js').catch(() => {});
+
+    // Check if opened via share target
+    if (location.search.includes('shared=1')) {
+      sharedBanner.style.display = 'flex';
+      await loadSharedFile();
+      // Clean URL
+      history.replaceState({}, '', location.pathname);
+    }
+  });
+}
+
+// ---- Load shared file from SW cache ----
+async function loadSharedFile() {
+  try {
+    const cache = await caches.open('luria-invoices-v1');
+    const response = await cache.match('/__shared_file__');
+    if (!response) return;
+    const blob = await response.blob();
+    const rawName = response.headers.get('X-File-Name');
+    const fileName = rawName ? decodeURIComponent(rawName) : 'חשבונית.pdf';
+    const file = new File([blob], fileName, { type: 'application/pdf' });
+    await cache.delete('/__shared_file__');
+    await processFiles([file]);
+  } catch (e) {
+    sharedBanner.style.display = 'none';
+  }
+}
+
+// ---- Drop zone events ----
+dropZone.addEventListener('click', () => fileInput.click());
+fileInput.addEventListener('change', e => processFiles(Array.from(e.target.files)));
+
+dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('dragging'); });
+dropZone.addEventListener('dragleave', () => dropZone.classList.remove('dragging'));
+dropZone.addEventListener('drop', e => {
+  e.preventDefault();
+  dropZone.classList.remove('dragging');
+  processFiles(Array.from(e.dataTransfer.files).filter(f => f.type === 'application/pdf'));
+});
+
+// ---- Core logic ----
+async function toBase64(file) {
+  return new Promise((res, rej) => {
+    const r = new FileReader();
+    r.onload = () => res(r.result.split(',')[1]);
+    r.onerror = () => rej(new Error('קריאה נכשלה'));
+    r.readAsDataURL(file);
+  });
+}
+
+async function analyzeInvoice(file) {
+  const base64 = await toBase64(file);
+  const apiKey = getApiKey();
+  if (!apiKey) throw new Error('חסר API Key');
+  const response = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01', 'anthropic-dangerous-direct-browser-access': 'true' },
+    body: JSON.stringify({
+      model: 'claude-sonnet-4-20250514',
+      max_tokens: 1000,
+      messages: [{
+        role: 'user',
+        content: [
+          {
+            type: 'document',
+            source: { type: 'base64', media_type: 'application/pdf', data: base64 }
+          },
+          {
+            type: 'text',
+            text: `נתח את המסמך והחזר JSON בלבד ללא טקסט נוסף:
+{
+  "supplier": "שם הספק המדויק מהמסמך",
+  "knownSupplier": "${KNOWN_SUPPLIERS.join('" | "')}" | null,
+  "docType": "חשבונית מס" | "תעודת משלוח" | "חשבונית זיכוי" | "הצעת מחיר" | "אחר",
+  "docNumber": "מספר המסמך",
+  "date": "תאריך בפורמט YYYY-MM",
+  "amount": "סכום סופי כולל מעמ במספרים בלבד ללא סימנים"
+}`
+          }
+        ]
+      }]
+    })
+  });
+  const data = await response.json();
+  const text = (data.content || []).find(c => c.type === 'text')?.text || '{}';
+  try {
+    return JSON.parse(text.replace(/```json|```/g, '').trim());
+  } catch {
+    return null;
+  }
+}
+
+function buildFileName(info) {
+  const supplier = (info.knownSupplier || info.supplier || 'לא_ידוע').replace(/\s+/g, '_');
+  const date = info.date || 'תאריך_לא_ידוע';
+  const type = (info.docType || 'מסמך').replace(/\s+/g, '_');
+  const num = (info.docNumber || 'ללא_מספר').replace(/\s+/g, '_');
+  return `${supplier}_${date}_${type}_${num}.pdf`;
+}
+
+async function processFiles(files) {
+  const pdfs = files.filter(f => f.type === 'application/pdf');
+  if (!pdfs.length) return;
+
+  processing.style.display = 'block';
+  resultsSection.style.display = 'none';
+  resultsList.innerHTML = '';
+
+  const results = [];
+  for (const file of pdfs) {
+    try {
+      const info = await analyzeInvoice(file);
+      results.push({
+        file,
+        info,
+        fileName: buildFileName(info || {}),
+        folderPath: info?.knownSupplier
+          ? `חשבוניות/${info.knownSupplier}`
+          : `חשבוניות/${info?.supplier || 'לא_ידוע'}`,
+        isUnknown: !info?.knownSupplier,
+        isError: false
+      });
+    } catch (err) {
+      // Fallback: try filename detection
+      const detectedSupplier = detectFromFilename(file.name);
+      results.push({
+        file,
+        info: detectedSupplier ? {
+          supplier: detectedSupplier,
+          knownSupplier: detectedSupplier,
+          docType: 'מסמך',
+          docNumber: '',
+          date: '',
+          amount: ''
+        } : null,
+        fileName: detectedSupplier
+          ? `${detectedSupplier}_${file.name}`
+          : file.name,
+        folderPath: detectedSupplier
+          ? `חשבוניות/${detectedSupplier}`
+          : null,
+        isUnknown: !detectedSupplier,
+        isError: !detectedSupplier,
+        error: err.message
+      });
+    }
+  }
+
+  processing.style.display = 'none';
+  sharedBanner.style.display = 'none';
+  renderResults(results);
+}
+
+function renderResults(results) {
+  resultsTitle.textContent = `תוצאות — ${results.length} מסמך${results.length > 1 ? 'ים' : ''}`;
+  resultsList.innerHTML = '';
+
+  results.forEach(r => {
+    const card = document.createElement('div');
+    card.className = `result-card ${r.isError ? 'error' : r.isUnknown ? 'unknown' : 'known'}`;
+
+    const badgeClass = r.isUnknown ? 'unknown' : 'known';
+    const badgeText = r.isError
+      ? '❌ שגיאה'
+      : r.isUnknown
+        ? `⚠️ ספק לא מזוהה`
+        : `✅ ${r.info.knownSupplier}`;
+
+    const infoGrid = r.info ? `
+      <div class="info-grid">
+        <div><span class="info-label">ספק: </span><span class="info-value">${r.info.supplier || '—'}</span></div>
+        <div><span class="info-label">סוג: </span><span class="info-value">${r.info.docType || '—'}</span></div>
+        <div><span class="info-label">מספר: </span><span class="info-value">${r.info.docNumber || '—'}</span></div>
+        <div><span class="info-label">סכום: </span><span class="info-value">${r.info.amount ? '₪' + r.info.amount : '—'}</span></div>
+        <div><span class="info-label">תאריך: </span><span class="info-value">${r.info.date || '—'}</span></div>
+      </div>` : '';
+
+    const unknownAlert = r.isUnknown && r.info?.supplier ? `
+      <div class="unknown-alert">
+        <strong>⚠️ ספק לא מוכר: "${r.info.supplier}"</strong><br>
+        צור תיקייה חדשה:<br>
+        <code>חשבוניות/${r.info.supplier}</code>
+      </div>` : '';
+
+    const saveBox = `
+      <div class="save-box">
+        <div class="save-label">📁 שמור ב:</div>
+        <div class="save-path">${r.folderPath || 'לא ידוע'}</div>
+        <div class="save-filename">${r.fileName}</div>
+      </div>`;
+
+    card.innerHTML = `
+      <div class="card-header">
+        <span class="supplier-badge ${badgeClass}">${badgeText}</span>
+        <span class="orig-name">${r.file.name}</span>
+      </div>
+      ${infoGrid}
+      ${unknownAlert}
+      ${saveBox}
+      <button class="btn-download">⬇️ הורד עם שם מסודר</button>
+    `;
+
+    card.querySelector('.btn-download').addEventListener('click', () => {
+      const url = URL.createObjectURL(r.file);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = r.fileName;
+      a.click();
+      URL.revokeObjectURL(url);
+    });
+
+    resultsList.appendChild(card);
+  });
+
+  resultsSection.style.display = 'block';
+}
+</script>
+</body>
+</html>
