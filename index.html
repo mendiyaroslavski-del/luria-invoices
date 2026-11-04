@@ -258,6 +258,24 @@ h1 { font-size: 24px; font-weight: 900; color: var(--gold); }
   text-align: center;
   margin-top: 8px;
 }
+/* Cloud */
+.cloud-bar{display:flex;gap:8px;justify-content:center;flex-wrap:wrap;padding:6px 0;min-height:30px}
+.cloud-pill{font-family:'Heebo',sans-serif;font-size:12px;padding:5px 14px;border-radius:20px;cursor:pointer;border:1px solid #ccc;background:#fff;color:#1a3a1a}
+.cloud-pill.ok{border-color:rgba(130,210,140,.7);color:#2e7d32}
+.cloud-pill.warn{border-color:rgba(232,200,122,.8);color:#8a6d1d}
+.cloud-pill.err{border-color:rgba(255,128,128,.8);color:#c62828}
+.mig-steps .st{display:flex;gap:10px;padding:8px 0;font-size:14px;border-bottom:1px solid rgba(0,0,0,.07)}
+.mig-steps .ic{width:22px;text-align:center}
+.mig-msg{margin-top:14px;font-size:13px;line-height:1.7}
+.mig-list{max-height:200px;overflow:auto;font-size:12px;line-height:1.6;background:rgba(0,0,0,.05);border-radius:8px;padding:8px 10px;margin-top:8px}
+.cloud-float{position:fixed;bottom:10px;left:10px;z-index:800}
+.mbg{position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:700;display:none;align-items:center;justify-content:center;padding:15px}
+.mbg.open{display:flex}
+.mbg .modal{background:#fff;border-radius:14px;padding:20px;width:100%;max-height:82vh;overflow-y:auto;direction:rtl;color:#1a1a14}
+.mbg .mtitle{font-size:17px;font-weight:700;color:#1a3a1a}
+.mbg .btn{padding:8px 16px;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit}
+.mbg .btnP{background:#2d5a27;color:#fff;border:none}
+.mbg .btnS{background:#f4f4f0;color:#555;border:1.5px solid #ddd}
 </style>
 </head>
 <body>
@@ -719,5 +737,506 @@ function renderResults(results) {
   resultsSection.style.display = 'block';
 }
 </script>
+<div class="cloud-bar cloud-float" id="cloud-bar"></div>
+<!-- ================= Cloud sync (Firebase) — luria-farm + luria-invoices ================= -->
+<div class="mbg" id="overlay-cloud">
+  <div class="modal" style="max-width:520px">
+    <div style="display:flex;justify-content:space-between;align-items:center">
+      <div class="mtitle" id="cloud-title" style="margin-bottom:6px">☁️ ענן</div>
+      <button class="btn btnS" style="padding:4px 10px" onclick="document.getElementById('overlay-cloud').classList.remove('open')">✕</button>
+    </div>
+    <div id="cloud-body"></div>
+  </div>
+</div>
+<div id="cloud-remote-banner" style="display:none;position:fixed;bottom:14px;left:50%;transform:translateX(-50%);z-index:900;background:#1a3a1a;color:#fff;padding:10px 16px;border-radius:12px;box-shadow:0 4px 18px rgba(0,0,0,.3);font-family:'Heebo',sans-serif;font-size:13px;cursor:pointer;direction:rtl">
+  📥 התקבלו עדכונים ממכשיר אחר — לחץ כאן לרענון
+</div>
+
+<script type="module">
+/* ---------------- settings ---------------- */
+const PAGE = 'invoices';                 // 'farm' or 'invoices' (same data, same browser storage)
+const NS = 'farm';                       // Firestore: farm/main/...
+const MODE_KEY = 'lfarm_mode';
+const BASE_KEY = 'lfarm_cloud_baseline';
+// Lists of records that each have an id: stored record by record (in 32 small bundles per list).
+const REC_KEYS = ['ld2', 'li2', 'ls2', 'lrcv2', 'lex2', 'lsal2'];
+// Everything else the system keeps: stored as-is.
+const BLOB_KEYS = ['linv2', 'lc2', 'lqa2', 'lcat2', 'lfields2', 'lkw2', 'lsinv2', 'luria_products_v1', 'pm_ignored', 'pm_different_pairs'];
+// Kept only on this device on purpose: luria_api_key, luria_last_backup, migration flags, annual PIN, Excel file link.
+const NB = 32, PART = 200000;
+const LABEL = { ld2: 'תעודה', li2: 'חשבונית', ls2: 'ריסוס', lrcv2: 'קבלה', lex2: 'הוצאה', lsal2: 'שכר' };
+
+const FB_VER = '12.18.0';
+const OWNER = 'lurietrogim@gmail.com';
+const FB_CONFIG = {
+  apiKey: "AIzaSyDeEqKUSOUvlJadmkaJ_E9qx-BifkpnKg4",
+  authDomain: "luria-farm.firebaseapp.com",
+  projectId: "luria-farm",
+  storageBucket: "luria-farm.firebasestorage.app",
+  messagingSenderId: "977449076829",
+  appId: "1:977449076829:web:2ef92d7bdb57690066a5b4"
+};
+/* ------------------------------------------ */
+
+const SYNC = new Set([...REC_KEYS, ...BLOB_KEYS]);
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
+const isCloud = () => localStorage.getItem(MODE_KEY) === 'cloud';
+const _set = Storage.prototype.setItem, _rem = Storage.prototype.removeItem, _clear = Storage.prototype.clear;
+const lsSet = (k, v) => _set.call(localStorage, k, v);
+const lsRem = k => _rem.call(localStorage, k);
+const openBox = () => $('overlay-cloud').classList.add('open');
+const closeBox = () => $('overlay-cloud').classList.remove('open');
+
+let F = null, auth = null, db = null, user = null;
+let ready = false, syncStarted = false, pending = 0, lastErr = null, authMsg = '';
+let cloudP = {};            // latest cloud documents (path -> data)
+let cloudL = {};            // the same, as logical entries
+let remoteWaiting = false;
+
+/* ---------- helpers ---------- */
+function stable(v){
+  if(Array.isArray(v)) return '[' + v.map(stable).join(',') + ']';
+  if(v && typeof v === 'object') return '{' + Object.keys(v).sort().map(k => JSON.stringify(k) + ':' + stable(v[k])).join(',') + '}';
+  return JSON.stringify(v);
+}
+function hash(str){                          // cyrb53
+  let h1 = 0xdeadbeef, h2 = 0x41c6ce57;
+  for(let i = 0, ch; i < str.length; i++){ ch = str.charCodeAt(i); h1 = Math.imul(h1 ^ ch, 2654435761); h2 = Math.imul(h2 ^ ch, 1597334677); }
+  h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909);
+  h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
+  return (4294967296 * (2097151 & h2) + (h1 >>> 0)).toString(36);
+}
+const hv = v => hash(stable(v));
+const bucketOf = lid => 'b' + String(parseInt(hash(lid).slice(-4), 36) % NB).padStart(2, '0');
+const parse = raw => { try { return JSON.parse(raw); } catch(e){ return undefined; } };
+
+/* ---------- device storage <-> logical entries ----------
+   r|<list>|<id>  one record      o|<list>  order of the records      b|<key>  stored text as-is   */
+function readLocal(){
+  const L = {};
+  for(const k of REC_KEYS){
+    const raw = localStorage.getItem(k);
+    if(raw === null) continue;
+    const arr = parse(raw);
+    if(!Array.isArray(arr)){ L['b|' + k] = raw; continue; }
+    const seen = {}, order = [];
+    arr.forEach(x => {
+      let lid = String(x && x.id != null ? x.id : 'noid');
+      if(seen[lid] != null){ seen[lid]++; lid = lid + '#' + seen[lid]; } else seen[lid] = 0;   // two records with the same id stay two records
+      L['r|' + k + '|' + lid] = JSON.parse(JSON.stringify(x));
+      order.push(lid);
+    });
+    L['o|' + k] = order;
+  }
+  for(const k of BLOB_KEYS){ const raw = localStorage.getItem(k); if(raw !== null) L['b|' + k] = raw; }
+  return L;
+}
+function writeLocal(L){
+  for(const k of REC_KEYS){
+    if(('b|' + k) in L){ lsSet(k, L['b|' + k]); continue; }
+    if(!(('o|' + k) in L)){ lsRem(k); continue; }
+    const pre = 'r|' + k + '|';
+    const order = L['o|' + k].filter(lid => (pre + lid) in L);
+    const inOrder = new Set(order);
+    const extra = Object.keys(L).filter(x => x.startsWith(pre) && !inOrder.has(x.slice(pre.length))).map(x => x.slice(pre.length)).sort();
+    lsSet(k, JSON.stringify([...order, ...extra].map(lid => L[pre + lid])));
+  }
+  for(const k of BLOB_KEYS){ if(('b|' + k) in L) lsSet(k, L['b|' + k]); else lsRem(k); }
+}
+
+/* ---------- logical entries <-> cloud documents ---------- */
+function pathsOf(lk, L){
+  const [t, k, lid] = lk.split('|');
+  if(t === 'r') return [k + '/' + bucketOf(lid)];
+  if(t === 'o') return ['order/' + k];
+  const raw = L[lk];
+  const n = raw == null ? 0 : Math.ceil(raw.length / PART);
+  const out = ['blobs/' + k];
+  for(let i = 0; i < n && n > 1; i++) out.push('blobs/' + k + '~' + i);
+  return out;
+}
+function buildDocs(L, paths){
+  const P = {};
+  for(const p of paths){
+    const [col, id] = p.split('/');
+    if(col === 'order'){ if(('o|' + id) in L) P[p] = { json: JSON.stringify(L['o|' + id]) }; continue; }
+    if(col === 'blobs'){
+      const [k, part] = id.split('~'); const raw = L['b|' + k];
+      if(raw == null) continue;
+      const n = Math.ceil(raw.length / PART);
+      if(part == null) P[p] = n > 1 ? { n } : { json: raw };
+      else if(n > 1 && +part < n) P[p] = { json: raw.slice(+part * PART, (+part + 1) * PART) };
+      continue;
+    }
+    const pre = 'r|' + col + '|';
+    const items = Object.keys(L).filter(x => x.startsWith(pre) && bucketOf(x.slice(pre.length)) === id).sort().map(x => [x.slice(pre.length), L[x]]);
+    if(items.length) P[p] = { json: JSON.stringify(items) };
+  }
+  return P;
+}
+function allPaths(L){ const s = new Set(); Object.keys(L).forEach(lk => pathsOf(lk, L).forEach(p => s.add(p))); return [...s]; }
+function fromDocs(P){
+  const L = {};
+  for(const [p, d] of Object.entries(P)){
+    const [col, id] = p.split('/');
+    if(col === 'order'){ L['o|' + id] = JSON.parse(d.json); continue; }
+    if(col === 'blobs'){
+      if(id.includes('~')) continue;
+      if(d.n){ let s = ''; for(let i = 0; i < d.n; i++){ const part = P['blobs/' + id + '~' + i]; if(!part) { s = null; break; } s += part.json; } if(s !== null) L['b|' + id] = s; }
+      else L['b|' + id] = d.json;
+      continue;
+    }
+    JSON.parse(d.json).forEach(([lid, rec]) => L['r|' + col + '|' + lid] = rec);
+  }
+  return L;
+}
+function diffKeys(L, B){
+  const ch = [];
+  for(const k in L) if(B[k] !== hv(L[k])) ch.push(k);
+  for(const k in B) if(!(k in L)) ch.push(k);
+  return ch;
+}
+const loadBase = () => parse(localStorage.getItem(BASE_KEY) || '{}') || {};
+const saveBase = B => lsSet(BASE_KEY, JSON.stringify(B));
+const hashesOf = L => { const B = {}; for(const k in L) B[k] = hv(L[k]); return B; };
+
+/* ---------- Firebase ---------- */
+async function ensureFb(){
+  if(F) return;
+  const base = `https://www.gstatic.com/firebasejs/${FB_VER}/`;
+  const [app, a, fs] = await Promise.all([import(base + 'firebase-app.js'), import(base + 'firebase-auth.js'), import(base + 'firebase-firestore.js')]);
+  const fbApp = app.getApps().length ? app.getApp() : app.initializeApp(FB_CONFIG);
+  auth = a.getAuth(fbApp);
+  try { db = fs.initializeFirestore(fbApp, { localCache: fs.persistentLocalCache({ tabManager: fs.persistentMultipleTabManager() }) }); }
+  catch(e){ db = fs.getFirestore(fbApp); }
+  F = { ...a, ...fs };
+}
+const dref = p => { const [c, id] = p.split('/'); return F.doc(db, NS, 'main', c, id); };
+const COLS = [...REC_KEYS, 'order', 'blobs'];
+const isOwner = u => !!u && (u.email || '').toLowerCase() === OWNER;
+function signIn(){
+  const p = new F.GoogleAuthProvider();
+  p.setCustomParameters({ prompt: 'select_account', login_hint: OWNER });
+  return F.signInWithPopup(auth, p);
+}
+async function readServer(){
+  const P = {};
+  for(const c of COLS){ const qs = await F.getDocsFromServer(F.collection(db, NS, 'main', c)); qs.forEach(d => P[c + '/' + d.id] = d.data()); }
+  return P;
+}
+// Write the documents that differ between `from` and `to` (both document maps), in small batches.
+async function writeDocs(from, to, paths, wait){
+  const jobs = [];
+  for(const p of paths){
+    if(p in to){ if(!(p in from) || stable(from[p]) !== stable(to[p])) jobs.push([p, to[p]]); }
+    else if(p in from) jobs.push([p, null]);
+  }
+  const commits = []; let failed = false;
+  for(let i = 0; i < jobs.length; i += 20){
+    const b = F.writeBatch(db);
+    jobs.slice(i, i + 20).forEach(([p, v]) => v ? b.set(dref(p), v) : b.delete(dref(p)));
+    const c = b.commit();
+    if(wait){ await c; continue; }
+    pending++; setStatus();
+    commits.push(c.then(() => { pending--; lastErr = null; setStatus(); }).catch(err => { failed = true; pending--; lastErr = err; console.error(err); setStatus(); }));
+  }
+  return wait ? jobs.length : Promise.all(commits).then(() => !failed);
+}
+
+/* Send this device's own changes (compared with the last synced state) on top of the latest cloud copy. */
+function pushLocal(){
+  if(!isCloud() || !ready) return;
+  const L = readLocal(), B = loadBase();
+  const changed = diffKeys(L, B);
+  if(!changed.length) return;
+  const target = { ...cloudL };
+  changed.forEach(k => { if(k in L) target[k] = L[k]; else delete target[k]; });
+  const paths = new Set();
+  changed.forEach(k => { pathsOf(k, cloudL).forEach(p => paths.add(p)); pathsOf(k, target).forEach(p => paths.add(p)); });
+  const toP = buildDocs(target, [...paths]);
+  const sent = {}; changed.forEach(k => sent[k] = (k in L) ? hv(L[k]) : null);
+  // Mark these as synced only once the cloud has confirmed them; until then they are simply sent again (harmless).
+  writeDocs(cloudP, toP, [...paths], false).then(okAll => {
+    if(!okAll) return;
+    const B2 = loadBase();
+    for(const k in sent){ if(sent[k] === null) delete B2[k]; else B2[k] = sent[k]; }
+    saveBase(B2);
+  });
+  // the cloud copy we compare against already includes them
+  [...paths].forEach(p => { if(p in toP) cloudP[p] = toP[p]; else delete cloudP[p]; });
+  cloudL = target;
+}
+let pushTimer = null;
+function schedulePush(){ clearTimeout(pushTimer); pushTimer = setTimeout(pushLocal, 400); }
+window.cloudPush = schedulePush;
+Storage.prototype.setItem = function(k, v){ _set.call(this, k, v); if(this === localStorage && SYNC.has(k)) schedulePush(); };
+Storage.prototype.removeItem = function(k){ _rem.call(this, k); if(this === localStorage && SYNC.has(k)) schedulePush(); };
+document.addEventListener('visibilitychange', () => { if(document.visibilityState === 'hidden'){ clearTimeout(pushTimer); pushLocal(); } });
+
+/* Changes that came from another device. */
+let lastInput = Date.now();
+['keydown', 'pointerdown', 'input', 'touchstart'].forEach(e => document.addEventListener(e, () => lastInput = Date.now(), true));
+function canApplyNow(){
+  if(PAGE !== 'farm') return true;     // the invoice sorter reads storage fresh every time
+  const busy = Date.now() - lastInput < 8000 || (document.activeElement && document.activeElement !== document.body)
+            || document.querySelector('.mbg.open:not(#overlay-cloud)');
+  return !busy;
+}
+function remoteKeys(){
+  const L = readLocal(), B = loadBase();
+  const mine = new Set(diffKeys(L, B));
+  const keys = new Set([...Object.keys(cloudL), ...Object.keys(B)]);
+  return [...keys].filter(k => !mine.has(k) && (k in cloudL ? hv(cloudL[k]) !== B[k] : (k in B)));
+}
+function applyRemote(force){
+  if(!ready) return;
+  const ks = remoteKeys();
+  if(!ks.length){ remoteWaiting = false; $('cloud-remote-banner').style.display = 'none'; return; }
+  // Safety: never let an (almost) empty cloud wipe this device. Stop and report instead.
+  const gone = ks.filter(k => !(k in cloudL)).length, baseN = Object.keys(loadBase()).length;
+  if(gone > 20 && Object.keys(cloudL).length < baseN / 2){
+    lastErr = { message: 'הענן החזיר הרבה פחות נתונים ממה שיש במכשיר. כדי לא למחוק כלום, הסנכרון נעצר. הנתונים במכשיר שמורים — פנה לבדיקה.' };
+    setStatus(); return;
+  }
+  if(!force && !canApplyNow()){ remoteWaiting = true; $('cloud-remote-banner').style.display = 'block'; return; }
+  const L = readLocal(), B = loadBase();
+  ks.forEach(k => { if(k in cloudL){ L[k] = cloudL[k]; B[k] = hv(cloudL[k]); } else { delete L[k]; delete B[k]; } });
+  writeLocal(L); saveBase(B);
+  remoteWaiting = false; $('cloud-remote-banner').style.display = 'none';
+  if(PAGE === 'farm') safeReload();
+}
+function safeReload(){
+  const now = Date.now();
+  const log = (parse(sessionStorage.getItem('lfarm_reloads') || '[]') || []).filter(t => now - t < 60000);
+  if(log.length >= 3){ remoteWaiting = true; $('cloud-remote-banner').style.display = 'block'; return; }
+  log.push(now); sessionStorage.setItem('lfarm_reloads', JSON.stringify(log));
+  location.reload();
+}
+$('cloud-remote-banner').onclick = () => applyRemote(true);
+window.__cloudDebug = { remoteKeys, readLocal, bucketOf, cloud: () => cloudL, base: loadBase };
+setInterval(() => { if(remoteWaiting) applyRemote(false); }, 5000);
+
+function startSync(){
+  if(syncStarted) return; syncStarted = true;
+  const snaps = {}; COLS.forEach(c => snaps[c] = null);
+  const onErr = err => { lastErr = err; console.error(err); setStatus(); };
+  COLS.forEach(c => F.onSnapshot(F.collection(db, NS, 'main', c), s => snaps[c] = s, onErr));
+  let first = true;
+  F.onSnapshotsInSync(db, () => {
+    if(Object.values(snaps).some(x => x === null)) return;
+    const P = {};
+    COLS.forEach(c => snaps[c].forEach(d => P[c + '/' + d.id] = d.data()));
+    cloudP = P; cloudL = fromDocs(P);
+    if(first){
+      first = false; ready = true;
+      // No record of an earlier sync on this device (should not happen after a normal move): take the cloud, never push over it.
+      if(!Object.keys(loadBase()).length && Object.keys(cloudL).length){
+        writeLocal(cloudL); saveBase(hashesOf(cloudL)); setStatus();
+        if(PAGE === 'farm') safeReload();
+        return;
+      }
+      pushLocal();
+    }
+    applyRemote(false);
+    setStatus();
+  });
+  pending++; setStatus();
+  F.waitForPendingWrites(db).then(() => { pending--; setStatus(); }).catch(() => { pending--; setStatus(); });
+}
+async function bootCloud(){
+  setStatus();
+  try { await ensureFb(); } catch(e){ lastErr = e; setStatus(); return; }
+  F.onAuthStateChanged(auth, async u => {
+    if(u && !isOwner(u)){ authMsg = `החשבון ${u.email} אינו מורשה. יש להתחבר עם ${OWNER}.`; await F.signOut(auth); return; }
+    user = u || null;
+    if(user){ authMsg = ''; startSync(); }
+    setStatus();
+  });
+}
+
+/* ---------- status ---------- */
+function setStatus(){
+  const bar = $('cloud-bar'); if(!bar) return;
+  if(!isCloud()){
+    bar.innerHTML = PAGE === 'farm'
+      ? `<button class="cloud-pill warn" onclick="cloudOpenMigrate()">☁️ העבר לענן</button><button class="cloud-pill" onclick="cloudBackup()">💾 גיבוי לקובץ</button>` : '';
+    return;
+  }
+  let cls = 'ok', txt = '☁️ נשמר בענן';
+  if(lastErr && lastErr.code === 'permission-denied'){ cls = 'err'; txt = '⚠️ אין הרשאה – לחץ לפרטים'; }
+  else if(!F && lastErr){ cls = 'err'; txt = '📴 עובד במכשיר בלבד'; }
+  else if(!user){ cls = 'warn'; txt = auth ? '🔒 התחבר לענן' : '⏳ מתחבר…'; }
+  else if(!ready){ cls = 'warn'; txt = '⏳ טוען מהענן…'; }
+  else if(!navigator.onLine){ cls = 'warn'; txt = '📴 אין חיבור – נשמר במכשיר'; }
+  else if(lastErr){ cls = 'err'; txt = '⚠️ שגיאה בשמירה – לחץ לפרטים'; }
+  else if(pending > 0){ cls = 'warn'; txt = '⏳ שולח…'; }
+  bar.innerHTML = `<button class="cloud-pill ${cls}" onclick="cloudOpenPanel()">${txt}</button>`;
+}
+window.addEventListener('online', setStatus);
+window.addEventListener('offline', setStatus);
+
+/* ---------- backup ---------- */
+window.cloudBackup = function(tag){
+  const out = {};
+  [...REC_KEYS, ...BLOB_KEYS].forEach(k => { const raw = localStorage.getItem(k); if(raw !== null) out[k] = raw; });
+  const blob = new Blob([JSON.stringify(out)], { type: 'application/json' });
+  const a = document.createElement('a');
+  const stamp = new Date().toISOString().slice(0, 16).replace(/[:T]/g, '-');
+  a.href = URL.createObjectURL(blob);
+  a.download = `luria-farm-backup_${tag || 'manual'}_${stamp}.json`;
+  document.body.appendChild(a); a.click();
+  setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1500);
+};
+
+/* ---------- panel ---------- */
+window.cloudOpenPanel = function(){
+  $('cloud-title').textContent = '☁️ חיבור לענן';
+  const errTxt = lastErr ? `<div class="mig-list" style="color:#c62828">${esc(lastErr.message || lastErr)}</div>` : '';
+  $('cloud-body').innerHTML = `
+    <div class="mig-msg">
+      ${user ? `מחובר כ־<b>${esc(user.email)}</b>.` : 'לא מחובר. הנתונים מוצגים מהעותק שבמכשיר, ושינויים יישלחו לענן אחרי ההתחברות.'}
+      ${authMsg ? `<div style="color:#c62828;margin-top:6px">${esc(authMsg)}</div>` : ''}
+      ${errTxt}
+    </div>
+    <div style="display:flex;flex-direction:column;gap:10px;margin-top:16px">
+      ${user ? '' : `<button class="btn btnP" id="cl-login" ${auth ? '' : 'disabled'}>🔑 התחבר עם Google</button>`}
+      <button class="btn btnS" onclick="cloudBackup()">💾 הורד גיבוי לקובץ</button>
+      ${user ? `<button class="btn btnS" id="cl-logout">התנתק</button>` : ''}
+    </div>`;
+  openBox();
+  const li = $('cl-login'), lo = $('cl-logout');
+  if(li) li.onclick = () => signIn().then(() => closeBox()).catch(e => { authMsg = 'ההתחברות לא הושלמה: ' + (e.code || e.message); cloudOpenPanel(); });
+  if(lo) lo.onclick = async () => { if(confirm('להתנתק מהענן במכשיר הזה?')){ await F.signOut(auth); closeBox(); } };
+};
+
+/* ---------- migration (farm page only) ---------- */
+const STEPS = ['התחברות לחשבון העסק', 'גיבוי לקובץ במכשיר', 'בדיקת מה שיש בענן', 'העלאת הנתונים', 'אימות מלא של כל רשומה', 'מעבר לעבודה מול הענן'];
+function drawSteps(cur, failed){
+  return `<div class="mig-steps">${STEPS.map((s, i) => `<div class="st"><span class="ic">${i < cur ? '✅' : i === cur ? (failed ? '❌' : '⏳') : '⬜'}</span><span>${s}</span></div>`).join('')}</div>`;
+}
+function migView(cur, msg, opts = {}){
+  $('cloud-body').innerHTML = drawSteps(cur, opts.failed) + `<div class="mig-msg">${msg || ''}</div>` +
+    (opts.list && opts.list.length ? `<div class="mig-list">${opts.list.slice(0, 200).map(esc).join('<br>')}${opts.list.length > 200 ? '<br>…' : ''}</div>` : '') + (opts.buttons || '');
+}
+const count = (L, k) => Object.keys(L).filter(x => x.startsWith('r|' + k + '|')).length;
+const summary = L => `<b>${count(L, 'ld2')}</b> תעודות, <b>${count(L, 'li2')}</b> חשבוניות, <b>${count(L, 'ls2')}</b> ריסוסים, <b>${count(L, 'lrcv2')}</b> קבלות, <b>${count(L, 'lex2')}</b> הוצאות, <b>${count(L, 'lsal2')}</b> חודשי שכר`;
+function labelOf(lk, L){
+  const [t, k, lid] = lk.split('|');
+  if(t === 'b') return 'נתונים כלליים: ' + k;
+  if(t === 'o') return 'סדר הרשומות: ' + k;
+  const v = L[lk] || {};
+  return (LABEL[k] || k) + ': ' + [v.sup, v.doc || v.num, v.date, v.mat, v.desc].filter(Boolean).join(' · ') + ` (${lid})`;
+}
+// A device that has never been used holds only the built-in history copy.
+function isFresh(L){
+  if(REC_KEYS.some(k => k !== 'ld2' && count(L, k) > 0)) return false;
+  return Object.keys(L).filter(x => x.startsWith('r|ld2|')).every(x => L[x] && L[x]._hist === true);
+}
+
+window.cloudOpenMigrate = function(){
+  $('cloud-title').textContent = '☁️ העברה לענן';
+  $('cloud-body').innerHTML = `
+    <div class="mig-msg" style="margin-top:0">
+      התהליך בטוח ואפשר להריץ אותו שוב אם נקטע:
+      <br>• קודם יורד למכשיר <b>קובץ גיבוי</b> של כל הנתונים.
+      <br>• שום דבר שכבר קיים בענן לא נדרס.
+      <br>• אחרי ההעלאה כל רשומה נבדקת מול המקור. רק אם הכול זהה, המערכת עוברת לענן.
+      <br>• העותק במכשיר <b>לא נמחק</b>. מפתח ה-API והחיבור לאקסל נשארים רק במכשיר.
+      <br><br>במכשיר הזה: ${summary(readLocal())}.
+    </div>
+    <div style="display:flex;gap:10px;margin-top:16px">
+      <button class="btn btnP" style="flex:1" id="mig-go" disabled>⏳ טוען…</button>
+      <button class="btn btnS" id="mig-cancel">ביטול</button>
+    </div>`;
+  $('mig-cancel').onclick = closeBox;
+  openBox();
+  ensureFb().then(() => { const b = $('mig-go'); if(!b) return; b.disabled = false; b.textContent = 'התחל'; b.onclick = runMigration; })
+            .catch(() => { const b = $('mig-go'); if(b) b.textContent = 'אין חיבור לאינטרנט'; });
+};
+
+async function runMigration(){
+  let step = 0;
+  const fail = (msg, list) => {
+    migView(step, msg, { failed: true, list, buttons: `<div style="display:flex;gap:10px;margin-top:16px"><button class="btn btnP" style="flex:1" id="mig-retry">נסה שוב</button><button class="btn btnS" id="mig-close">סגור</button></div>` });
+    $('mig-retry').onclick = cloudOpenMigrate; $('mig-close').onclick = closeBox;
+  };
+  try {
+    migView(step, 'נפתח חלון התחברות של Google…');
+    let u = auth.currentUser;
+    if(!isOwner(u)){ if(u) await F.signOut(auth); u = (await signIn()).user; }
+    if(!isOwner(u)){ await F.signOut(auth); return fail(`החשבון ${u.email} אינו מורשה. יש להתחבר עם ${OWNER}.`); }
+    user = u; step = 1;
+
+    migView(step, 'מוריד קובץ גיבוי…');
+    cloudBackup('before-cloud');
+    step = 2;
+
+    migView(step, 'בודק מה כבר קיים בענן…');
+    const local = readLocal();
+    const noId = Object.keys(local).filter(k => k.startsWith('r|') && (k.endsWith('|noid') || k.includes('|noid#')));
+    if(noId.length) return fail('יש רשומות בלי מזהה, ולכן ההעברה נעצרה. שום דבר לא השתנה. שלח את קובץ הגיבוי לבדיקה.', noId.map(k => labelOf(k, local)));
+    let cp;
+    try { cp = await readServer(); } catch(e){ return fail('אין חיבור לענן כרגע (' + (e.code || e.message) + '). שום דבר לא השתנה, אפשר לנסות שוב.'); }
+    const cl = fromDocs(cp);
+    const cloudHasData = Object.keys(cl).length > 0;
+
+    if(isFresh(local) && cloudHasData){
+      step = 5;
+      return finish(cl, cl, 0, 'במכשיר הזה היו רק נתוני ההיסטוריה המובנים, ולכן הנתונים נטענו מהענן.');
+    }
+
+    const conflicts = [];
+    for(const k in local){
+      if(!(k in cl) || k.startsWith('o|')) continue;
+      if(hv(cl[k]) !== hv(local[k])) conflicts.push(labelOf(k, local));
+    }
+    if(conflicts.length){
+      fail('בענן כבר יש גרסה אחרת של הרשומות הבאות. כדי לא לדרוס אף אחת מהן, ההעברה נעצרה ושום דבר לא השתנה:', conflicts);
+      // A second device with an old copy: offer to replace this device's copy with the cloud (its backup was just downloaded).
+      const box = document.createElement('div');
+      box.innerHTML = `<div class="mig-msg">אם זה <b>מכשיר נוסף</b> (לא המכשיר הראשי שממנו הועברו הנתונים), אפשר להחליף את מה שיש בו בנתונים מהענן. קובץ גיבוי של המכשיר הזה כבר ירד.</div>
+        <button class="btn btnS" style="width:100%;margin-top:8px" id="mig-take">⬇️ החלף את הנתונים במכשיר הזה בנתונים מהענן</button>`;
+      $('cloud-body').appendChild(box);
+      $('mig-take').onclick = () => { if(confirm('להחליף את כל נתוני המערכת במכשיר הזה בנתונים מהענן?')) finish(cl, cl, 0, 'הנתונים במכשיר הזה הוחלפו בנתונים מהענן.'); };
+      return;
+    }
+    step = 3;
+
+    const target = { ...cl, ...local };
+    const paths = allPaths(target);
+    const toP = buildDocs(target, paths);
+    migView(step, `מעלה… (${paths.length} חבילות)`);
+    await writeDocs(cp, toP, paths, true);
+    step = 4;
+
+    migView(step, 'קורא את הכול בחזרה מהענן ומשווה רשומה אחרי רשומה…');
+    const after = fromDocs(await readServer());
+    const bad = Object.keys(target).filter(k => !(k in after) || hv(after[k]) !== hv(target[k]));
+    if(bad.length) return fail('הרשומות הבאות לא הגיעו לענן בצורה זהה. המערכת נשארת במצב מקומי:', bad.map(k => labelOf(k, target)));
+    step = 5;
+    return finish(after, target, Object.keys(target).filter(k => k.startsWith('r|')).length, '');
+  } catch(e){
+    console.error(e);
+    return fail('התהליך נעצר: ' + (e.code || e.message) + '. המערכת נשארת במצב מקומי בדיוק כמו קודם.');
+  }
+}
+function finish(after, target, checked, note){
+  writeLocal(after);
+  saveBase(hashesOf(after));
+  lsSet(MODE_KEY, 'cloud');
+  migView(6, `<b>ההעברה הושלמה.</b><br>
+    ${note ? note + '<br>' : ''}
+    ${checked ? `${checked} רשומות נבדקו אחת־אחת ונמצאו זהות למקור.<br>` : ''}
+    בענן עכשיו: ${summary(after)}.<br>
+    מעכשיו כל שמירה נשלחת לענן, גם מ"מיון חשבוניות". העותק במכשיר לא נמחק.<br>
+    אחרי הסגירה הדף ייטען מחדש. כדאי לבדוק את לוח הבקרה ותעודה או שתיים שאתה מכיר.`,
+    { buttons: `<button class="btn btnP" style="width:100%;margin-top:16px" id="mig-done">סגור וטען מחדש</button>` });
+  $('mig-done').onclick = () => location.reload();
+}
+
+if(isCloud()) bootCloud(); else setStatus();
+</script>
+
 </body>
 </html>
