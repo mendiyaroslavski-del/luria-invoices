@@ -370,6 +370,7 @@ h1 { font-size: 24px; font-weight: 900; color: var(--gold); }
   <div class="folder-guide" style="padding:14px">
     <input class="field-input" id="ls-search" placeholder="🔎 חיפוש לפי ספק או מספר" oninput="renderList()">
     <div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap">
+      <select class="field-select" id="ls-year" style="flex:0 0 110px" onchange="renderList()"></select>
       <select class="field-select" id="ls-sup" style="flex:1;min-width:150px" onchange="renderList()"></select>
       <select class="field-select" id="ls-filter" style="flex:1;min-width:150px" onchange="renderList()">
         <option value="">כל החשבוניות</option>
@@ -776,8 +777,8 @@ function renderApprovalCard(r, index) {
     <input type="hidden" id="f-for-${index}" value="${escA(info.forInvoice || '')}">
     <div class="field-group">
       <div class="field-label">📁 קישור לתיקייה בדרייב (לא חובה)</div>
-      <input class="field-input" id="f-drive-${index}" value="${escA(driveFolderFor(detected))}" placeholder="הדבק כאן קישור לתיקייה של הספק" dir="ltr" oninput="this.dataset.touched=1">
-      <div class="field-label" style="margin-top:4px">${driveFolderFor(detected) ? 'מולא אוטומטית מהחשבונית הקודמת של הספק' : 'מספיק פעם אחת לכל ספק — בפעם הבאה זה יתמלא לבד'}</div>
+      <input class="field-input" id="f-drive-${index}" value="${escA(driveFolderFor(detected, (info.date || '').slice(0, 4)))}" placeholder="הדבק כאן קישור לתיקייה של הספק" dir="ltr" oninput="this.dataset.touched=1">
+      <div class="field-label" style="margin-top:4px">${driveFolderFor(detected, (info.date || '').slice(0, 4)) ? 'מולא אוטומטית מהחשבונית הקודמת של הספק' : 'מספיק פעם אחת לכל ספק — בפעם הבאה זה יתמלא לבד'}</div>
     </div>
     <div class="save-box" style="margin-bottom:12px">
       <div class="save-label">📁 יישמר ב:</div>
@@ -801,16 +802,19 @@ function cleanDriveLink(v) {
   return m ? m[0] : '';
 }
 // The folder link used last time for this supplier.
-function driveFolderFor(sup) {
+function driveFolderFor(sup, year) {
   if (!sup) return '';
-  const all = [...LF('li2'), ...LF('ld2')].filter(x => x && x._driveFolder && sameSup(x.sup, sup));
+  let all = [...LF('li2'), ...LF('ld2')].filter(x => x && x._driveFolder && sameSup(x.sup, sup));
+  if (year && all.some(x => yearOf(x) === String(year))) all = all.filter(x => yearOf(x) === String(year));
   all.sort((a, b) => String(b._sortedAt || b.date || '').localeCompare(String(a._sortedAt || a.date || '')));
   return all.length ? all[0]._driveFolder : '';
 }
 function onSupChange(i) {
   const f = document.getElementById(`f-drive-${i}`);
-  if (f && !f.dataset.touched) f.value = driveFolderFor(document.getElementById(`f-sup-${i}`).value);
+  if (f && !f.dataset.touched) f.value = driveFolderFor(document.getElementById(`f-sup-${i}`).value, (document.getElementById(`f-date-${i}`).value || '').slice(0, 4));
 }
+
+const yearOf = x => String((x && (x.date || '').slice(0, 4)) || (x && x.year) || '');
 
 // ---- Tabs ----
 function showTab(t) {
@@ -833,11 +837,20 @@ function renderList(fillSuppliers) {
     supSel.innerHTML = `<option value="">כל הספקים</option>` + Object.keys(counts).sort((a, b) => counts[b] - counts[a]).map(s => `<option value="${e(s)}">${e(s)} (${counts[s]})</option>`).join('');
     supSel.value = cur;
   }
+  const yearSel = document.getElementById('ls-year');
+  if (fillSuppliers || !yearSel.options.length) {
+    const cur = yearSel.value;
+    const years = [...new Set(invs.map(yearOf).filter(Boolean))].sort().reverse();
+    yearSel.innerHTML = `<option value="">כל השנים</option>` + years.map(y => `<option value="${y}">${y}</option>`).join('');
+    yearSel.value = cur;
+  }
+  const year = yearSel.value;
   const q = document.getElementById('ls-search').value.trim();
   const sup = supSel.value;
   const flt = document.getElementById('ls-filter').value;
   let list = invs.map((x, i) => ({ x, i })).filter(({ x }) =>
     (!sup || x.sup === sup) &&
+    (!year || yearOf(x) === year) &&
     (!q || String(x.sup || '').includes(q) || String(x.num || '').includes(q)) &&
     (flt !== 'nofolder' || !x._driveFolder) &&
     (flt !== 'unpaid' || !x.paid) &&
@@ -845,16 +858,16 @@ function renderList(fillSuppliers) {
   list.sort((a, b) => String(b.x.date || '').localeCompare(String(a.x.date || '')));
   const total = list.reduce((t, { x }) => t + (Number(x.total) || 0), 0);
   const noFolder = list.filter(({ x }) => !x._driveFolder).length;
-  document.getElementById('ls-summary').textContent = `${list.length} חשבוניות · ₪${total.toLocaleString('he-IL', { maximumFractionDigits: 2 })}${noFolder ? ` · ${noFolder} בלי קישור לדרייב` : ''}`;
+  document.getElementById('ls-summary').textContent = `${year ? year + ': ' : ''}${list.length} חשבוניות · ₪${total.toLocaleString('he-IL', { maximumFractionDigits: 2 })}${noFolder ? ` · ${noFolder} בלי קישור לדרייב` : ''}`;
 
   // one-tap link for a whole supplier
   const box = document.getElementById('ls-supbox');
   if (sup) {
-    const missing = invs.filter(x => x.sup === sup && !x._driveFolder).length;
-    const link = driveFolderFor(sup);
+    const missing = invs.filter(x => x.sup === sup && (!year || yearOf(x) === year) && !x._driveFolder).length;
+    const link = driveFolderFor(sup, year);
     box.innerHTML = `<div style="margin-top:10px;font-size:13px;color:rgba(255,255,255,.75)">
       ${link ? `📁 תיקיית הספק: <a class="inv-btn" href="${e(link)}" target="_blank" rel="noopener">פתח בדרייב</a>` : '📁 לספק הזה עדיין אין תיקייה'}
-      <button class="inv-btn add" style="margin-right:6px" onclick="setSupplierFolder()">${link ? '✏️ שנה' : '➕ הוסף'} קישור${missing ? ` (יוחל על ${missing} חשבוניות בלי קישור)` : ''}</button></div>`;
+      <button class="inv-btn add" style="margin-right:6px" onclick="setSupplierFolder()">${link ? '✏️ שנה' : '➕ הוסף'} קישור${year ? ' ל-' + year : ''}${missing ? ` (יוחל על ${missing} חשבוניות בלי קישור)` : ''}</button></div>`;
   } else box.innerHTML = '';
 
   const rows = list.slice(0, 300).map(({ x, i }) => `
@@ -864,7 +877,7 @@ function renderList(fillSuppliers) {
         <div class="inv-sub">${e(x.date || '')} · מס' ${e(x.num || '')} · <span class="${x.paid ? 'badge-paid' : 'badge-unpaid'}">${x.paid ? 'שולמה' : 'לא שולמה'}</span>${x._fromInvoiceSorter ? ' · 📥' : ''}</div>
       </div>
       <div class="inv-amt">₪${(Number(x.total) || 0).toLocaleString('he-IL', { maximumFractionDigits: 2 })}</div>
-      ${x._driveFolder ? `<a class="inv-btn" href="${e(x._driveFolder)}" target="_blank" rel="noopener">📁 דרייב</a>` : `<button class="inv-btn add" onclick="setInvoiceFolder(${i})">➕ קישור</button>`}
+      ${x._driveFolder ? `<a class="inv-btn" href="${e(x._driveFolder)}" target="_blank" rel="noopener">📁 דרייב</a><button class="inv-btn add" title="שנה קישור" onclick="setInvoiceFolder(${i})">✏️</button>` : `<button class="inv-btn add" onclick="setInvoiceFolder(${i})">➕ קישור</button>`}
     </div>`).join('');
   document.getElementById('ls-rows').innerHTML = rows || '<div class="folder-guide" style="text-align:center">אין חשבוניות להצגה</div>';
 }
@@ -877,18 +890,28 @@ function askLink(current) {
 }
 function setInvoiceFolder(i) {
   const invs = LF('li2'); const x = invs[i]; if (!x) return;
-  const link = askLink(driveFolderFor(x.sup));
+  const old = x._driveFolder || '';
+  const link = askLink(old || driveFolderFor(x.sup, yearOf(x)));
   if (!link) return;
   x._driveFolder = link;
+  // Offer the same link to the supplier's other invoices that have no link (or had the same wrong one).
+  const y = yearOf(x);
+  const fits = o => o !== x && o.sup === x.sup && (!o._driveFolder || (old && o._driveFolder === old));
+  const sameYear = invs.filter(o => fits(o) && yearOf(o) === y);
+  if (sameYear.length && confirm(`להחיל את הקישור גם על עוד ${sameYear.length} חשבוניות של ${x.sup} משנת ${y}?`)) sameYear.forEach(o => o._driveFolder = link);
+  const otherYears = invs.filter(o => fits(o) && yearOf(o) !== y);
+  if (otherYears.length && confirm(`ויש עוד ${otherYears.length} חשבוניות של ${x.sup} משנים אחרות. להחיל גם עליהן?\n(אם התיקייה בדרייב מחולקת לפי שנים — לחץ ביטול)`)) otherYears.forEach(o => o._driveFolder = link);
   localStorage.setItem('li2', JSON.stringify(invs));
   renderList();
 }
 function setSupplierFolder() {
   const sup = document.getElementById('ls-sup').value; if (!sup) return;
-  const link = askLink(driveFolderFor(sup));
+  const year = document.getElementById('ls-year').value;
+  const old = driveFolderFor(sup, year);
+  const link = askLink(old);
   if (!link) return;
   const invs = LF('li2'); let n = 0;
-  invs.forEach(x => { if (x.sup === sup && (!x._driveFolder || x._driveFolder === driveFolderFor(sup))) { x._driveFolder = link; n++; } });
+  invs.forEach(x => { if (x.sup === sup && (!year || yearOf(x) === year) && (!x._driveFolder || x._driveFolder === old)) { x._driveFolder = link; n++; } });
   localStorage.setItem('li2', JSON.stringify(invs));
   renderList();
 }
