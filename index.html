@@ -293,7 +293,7 @@ h1 { font-size: 24px; font-weight: 900; color: var(--gold); }
   <div class="folder-guide-title">📱 מבנה תיקיות בטלפון:</div>
   <div class="folder-item">📁 חשבוניות / <strong>עמיר</strong></div>
   <div class="folder-item">📁 חשבוניות / <strong>המשביר</strong></div>
-  <div class="folder-item">📁 חשבוניות / <strong>ICL</strong></div>
+  <div class="folder-item">📁 חשבוניות / <strong>דשנים ICL</strong></div>
   <div class="folder-item">📁 חשבוניות / <strong>דשנים</strong></div>
   <div class="folder-item">📁 חשבוניות / <span>ספק חדש — תיצור לפי הצורך</span></div>
 </div>
@@ -348,7 +348,7 @@ h1 { font-size: 24px; font-weight: 900; color: var(--gold); }
 </div>
 
 <script>
-const KNOWN_SUPPLIERS = ['עמיר', 'המשביר', 'ICL', 'דשנים'];
+const KNOWN_SUPPLIERS = ['עמיר', 'המשביר', 'דשנים ICL', 'דשנים', 'טיב כימיקלים'];
 
 // API Key from localStorage
 function getApiKey() {
@@ -363,7 +363,7 @@ function detectFromFilename(filename) {
   const name = filename.toLowerCase();
   if (name.includes('עמיר') || name.includes('amir')) return 'עמיר';
   if (name.includes('משביר') || name.includes('mashbir')) return 'המשביר';
-  if (name.includes('icl') || name.includes('דשנים')) return 'ICL';
+  if (name.includes('icl')) return 'דשנים ICL';
   if (name.includes('dashanim') || name.includes('דשן')) return 'דשנים';
   return null;
 }
@@ -436,7 +436,7 @@ async function loadSharedFile() {
 
 // ---- Drop zone events ----
 dropZone.addEventListener('click', () => fileInput.click());
-fileInput.addEventListener('change', e => processFiles(Array.from(e.target.files)));
+fileInput.addEventListener('change', e => { const fs = Array.from(e.target.files); e.target.value = ''; processFiles(fs); });
 
 dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('dragging'); });
 dropZone.addEventListener('dragleave', () => dropZone.classList.remove('dragging'));
@@ -454,56 +454,6 @@ async function toBase64(file) {
     r.onerror = () => rej(new Error('קריאה נכשלה'));
     r.readAsDataURL(file);
   });
-}
-
-async function analyzeInvoice(file) {
-  const base64 = await toBase64(file);
-  const apiKey = getApiKey();
-  if (!apiKey) throw new Error('חסר API Key');
-  const response = await fetch('https://api.anthropic.com/v1/messages', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01', 'anthropic-dangerous-direct-browser-access': 'true' },
-    body: JSON.stringify({
-      model: 'claude-sonnet-4-20250514',
-      max_tokens: 1000,
-      messages: [{
-        role: 'user',
-        content: [
-          {
-            type: 'document',
-            source: { type: 'base64', media_type: 'application/pdf', data: base64 }
-          },
-          {
-            type: 'text',
-            text: `נתח את המסמך והחזר JSON בלבד ללא טקסט נוסף:
-{
-  "supplier": "שם הספק המדויק מהמסמך",
-  "knownSupplier": "${KNOWN_SUPPLIERS.join('" | "')}" | null,
-  "docType": "חשבונית מס" | "תעודת משלוח" | "חשבונית זיכוי" | "הצעת מחיר" | "אחר",
-  "docNumber": "מספר המסמך",
-  "date": "תאריך בפורמט YYYY-MM",
-  "amount": "סכום סופי כולל מעמ במספרים בלבד ללא סימנים"
-}`
-          }
-        ]
-      }]
-    })
-  });
-  const data = await response.json();
-  const text = (data.content || []).find(c => c.type === 'text')?.text || '{}';
-  try {
-    return JSON.parse(text.replace(/```json|```/g, '').trim());
-  } catch {
-    return null;
-  }
-}
-
-function buildFileName(info) {
-  const supplier = (info.knownSupplier || info.supplier || 'לא_ידוע').replace(/\s+/g, '_');
-  const date = info.date || 'תאריך_לא_ידוע';
-  const type = (info.docType || 'מסמך').replace(/\s+/g, '_');
-  const num = (info.docNumber || 'ללא_מספר').replace(/\s+/g, '_');
-  return `${supplier}_${date}_${type}_${num}.pdf`;
 }
 
 async function processFiles(files) {
@@ -559,64 +509,179 @@ async function processFiles(files) {
   renderResults(results);
 }
 
-// ---- Sync to luria-farm localStorage ----
-function syncToLuriaFarm(info, docType) {
+// ---- Reading the big system's data (same browser storage) ----
+const LF = k => { try { const v = JSON.parse(localStorage.getItem(k) || '[]'); return Array.isArray(v) ? v : []; } catch { return []; } };
+const normNum = s => String(s || '').replace(/\D/g, '').replace(/^0+/, '');
+const sameSup = (a, b) => { a = String(a || '').trim(); b = String(b || '').trim(); return !!a && !!b && (a === b || a.includes(b) || b.includes(a)); };
+const INVOICE_TYPES = ['חשבונית מס', 'חשבונית מס קבלה', 'חשבונית זיכוי'];
+const DOC_TYPES = ['חשבונית מס', 'חשבונית מס קבלה', 'תעודת משלוח', 'חשבונית זיכוי', 'קבלה', 'הצעת מחיר', 'אחר'];
+
+// Supplier names exactly as the big system writes them, most used first.
+function farmSuppliers() {
+  const c = {};
+  const add = (s, n = 1) => { s = String(s || '').trim(); if (s) c[s] = (c[s] || 0) + n; };
+  LF('li2').forEach(x => add(x.sup));
+  LF('ld2').forEach(x => add(x.sup));
+  LF('lc2').forEach(s => add(s, 0));
+  KNOWN_SUPPLIERS.forEach(s => add(s, 0));
+  return Object.keys(c).sort((a, b) => c[b] - c[a]);
+}
+
+// Newest model first; if a model name is no longer offered, the next one is tried.
+const MODELS = ['claude-sonnet-5-5', 'claude-sonnet-5', 'claude-sonnet-4-5'];
+async function callClaude(apiKey, body) {
+  let lastMsg = '';
+  for (const model of MODELS) {
+    let res;
+    try {
+      res = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01', 'anthropic-dangerous-direct-browser-access': 'true' },
+        body: JSON.stringify({ ...body, model })
+      });
+    } catch (e) { throw new Error('אין חיבור לאינטרנט'); }
+    let data = {};
+    try { data = await res.json(); } catch {}
+    if (res.ok) return data;
+    const msg = (data && data.error && data.error.message) || ('HTTP ' + res.status);
+    if (res.status === 404 || (res.status === 400 && /model/i.test(msg))) { lastMsg = msg; continue; }
+    if (res.status === 401) throw new Error('מפתח ה-API לא תקין או שבוטל — בדוק אותו בחשבון Anthropic');
+    if (res.status === 429) throw new Error('יותר מדי בקשות ברגע זה — נסה שוב בעוד דקה');
+    if (/credit|balance|billing/i.test(msg)) throw new Error('אין מספיק יתרה בחשבון ה-API של Anthropic');
+    throw new Error('שגיאה מ-Claude: ' + msg);
+  }
+  throw new Error('לא נמצא מודל זמין (' + lastMsg + ')');
+}
+
+async function analyzeInvoice(file) {
+  const base64 = await toBase64(file);
+  const apiKey = getApiKey();
+  if (!apiKey) throw new Error('חסר מפתח API');
+  const sups = farmSuppliers().slice(0, 60);
+  const data = await callClaude(apiKey, {
+    max_tokens: 1000,
+    messages: [{
+      role: 'user',
+      content: [
+        { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: base64 } },
+        { type: 'text', text: `זה מסמך שהתקבל אצל "אתרוגי לוריא" (הלקוח). נתח אותו והחזר JSON בלבד, בלי שום טקסט נוסף:
+{
+  "supplier": "שם העסק שהנפיק את המסמך — לא אתרוגי לוריא",
+  "knownSupplier": "אם זה אחד מהספקים ברשימה למטה — השם בדיוק כפי שהוא ברשימה, אחרת null",
+  "docType": ${DOC_TYPES.map(t => '"' + t + '"').join(' | ')},
+  "docNumber": "מספר המסמך",
+  "date": "תאריך המסמך בפורמט YYYY-MM-DD",
+  "amount": "הסכום הסופי לתשלום כולל מע\\"מ — מספר בלבד",
+  "forInvoice": "אם זו קבלה: מספר החשבונית שהיא משלמת, אחרת null"
+}
+רשימת הספקים הקיימים: ${sups.join(' | ')}` }
+      ]
+    }]
+  });
+  const text = (data.content || []).filter(c => c.type === 'text').map(c => c.text).join('\n');
+  const m = text.match(/\{[\s\S]*\}/);
+  if (!m) throw new Error('Claude לא החזיר נתונים');
+  let info;
+  try { info = JSON.parse(m[0]); } catch { throw new Error('לא הצלחתי לקרוא את תשובת Claude'); }
+  if (info.knownSupplier && !sups.includes(info.knownSupplier)) info.knownSupplier = null;
+  if (info.amount != null) info.amount = String(info.amount).replace(/[^\d.\-]/g, '');
+  return info;
+}
+
+function buildFileName(info) {
+  const supplier = (info.knownSupplier || info.supplier || 'לא_ידוע').replace(/[\s\/\\:*?"<>|]+/g, '_');
+  const date = info.date || 'תאריך_לא_ידוע';
+  const type = (info.docType || 'מסמך').replace(/\s+/g, '_');
+  const num = (info.docNumber || 'ללא_מספר').replace(/[\s\/\\]+/g, '_');
+  return `${supplier}_${date}_${type}_${num}.pdf`;
+}
+
+// What already exists in the big system for this document (or null).
+function findExisting(info, docType) {
+  const n = normNum(info.docNumber);
+  if (!n) return null;
+  if (INVOICE_TYPES.includes(docType)) {
+    const r = LF('li2').find(x => normNum(x.num) === n && sameSup(x.sup, info.supplier));
+    return r ? { kind: 'חשבונית', num: r.num, date: r.date, total: r.total, paid: r.paid } : null;
+  }
+  if (docType === 'תעודת משלוח') {
+    const r = LF('ld2').find(x => normNum(x.doc) === n && sameSup(x.sup, info.supplier));
+    return r ? { kind: 'תעודה', num: r.doc, date: r.date } : null;
+  }
+  return null;
+}
+function findInvoiceForReceipt(info) {
+  const n = normNum(info.forInvoice);
+  if (!n) return null;
+  return LF('li2').find(x => normNum(x.num) === n && sameSup(x.sup, info.supplier)) || null;
+}
+
+const vatRateFor = date => (String(date || '').slice(0, 4) >= '2025' ? 0.18 : 0.17);
+const r2 = x => Math.round(x * 100) / 100;
+
+// ---- Write into the big system, in exactly its own format ----
+function syncToLuriaFarm(info, docType, srcFile) {
   try {
-    const loadF = k => { try { return JSON.parse(localStorage.getItem(k)||'[]'); } catch { return []; } };
-    const saveF = (k,v) => localStorage.setItem(k, JSON.stringify(v));
-
+    const saveF = (k, v) => localStorage.setItem(k, JSON.stringify(v));
     const date = info.date || '';
-    const [year, month] = date.split('-');
-    const sup = info.supplier || '';
-    const num = info.docNumber || '';
-    const total = parseFloat((info.amount||'0').replace(/[^\d.]/g,'')) || 0;
+    const [y, m] = date.split('-');
+    const year = +y || 0, month = +m || 0;
+    const sup = (info.supplier || '').trim();
+    const num = (info.docNumber || '').trim();
+    const total = parseFloat(String(info.amount || '0').replace(/[^\d.\-]/g, '')) || 0;
+    const stamp = new Date().toISOString();
 
-    if (docType === 'חשבונית מס' || docType === 'חשבונית זיכוי') {
-      const invs = loadF('li2');
-      const exists = invs.find(x => x.num === num && x.sup === sup);
-      if (!exists) {
-        invs.push({
-          id: Date.now(),
-          num, date, sup,
-          month: month||'',
-          year: year||'',
-          total: docType === 'חשבונית זיכוי' ? -Math.abs(total) : total,
-          docIds: [],
-          direct: true,
-          directItems: [],
-          paid: false,
-          paidDate: '',
-          _fromInvoiceSorter: true
-        });
-        saveF('li2', invs);
-      }
-      return !exists;
+    if (docType === 'קבלה') {
+      const invs = LF('li2');
+      const n = normNum(info.forInvoice);
+      const inv = n && invs.find(x => normNum(x.num) === n && sameSup(x.sup, sup));
+      if (!inv) return { status: 'noInvoice' };
+      if (inv.paid) return { status: 'alreadyPaid', rec: inv };
+      inv.paid = true; inv.paidDate = date; inv._receiptNum = num;
+      saveF('li2', invs);
+      return { status: 'paid', rec: inv };
+    }
+
+    if (INVOICE_TYPES.includes(docType)) {
+      if (findExisting(info, docType)) return { status: 'exists' };
+      const invs = LF('li2');
+      const amount = docType === 'חשבונית זיכוי' ? -Math.abs(total) : total;
+      const paidNow = docType === 'חשבונית מס קבלה';
+      invs.push({
+        id: Date.now(),
+        num, date, sup, month, year,
+        total: amount,
+        docIds: [],
+        directItems: [{ id: Date.now() + Math.random(), desc: `${docType} ${num} (ממיון חשבוניות)`, amount }],
+        direct: true,
+        paid: paidNow,
+        paidDate: paidNow ? date : '',
+        _fromInvoiceSorter: true, _srcFile: srcFile || '', _sortedAt: stamp
+      });
+      saveF('li2', invs);
+      return { status: 'added' };
     }
 
     if (docType === 'תעודת משלוח') {
-      const dels = loadF('ld2');
-      const exists = dels.find(x => String(x.doc) === String(num) && x.sup === sup);
-      if (!exists) {
-        dels.push({
-          id: Date.now() + Math.random(),
-          sup, doc: num, date,
-          month: month||'',
-          year: year||'',
-          total,
-          items: [{desc: 'מיון חשבוניות אוטומטי', qty:1, price: total, unit:''}],
-          invNum: '',
-          ts: Date.now(),
-          _fromInvoiceSorter: true
-        });
-        saveF('ld2', dels);
-      }
-      return !exists;
+      if (findExisting(info, docType)) return { status: 'exists' };
+      const dels = LF('ld2');
+      const rate = vatRateFor(date);
+      const net = r2(total / (1 + rate));
+      dels.push({
+        id: Date.now() + Math.random(),
+        sup, doc: num, date, year: y || '',
+        items: [{ id: 's' + Date.now(), product: 'תעודה ממיון חשבוניות — לפרט', qty: 1, price: net, discount: 0, total: net, vat: r2(total - net), totalV: total, cat: '' }],
+        invNum: '', ts: Date.now(),
+        _fromInvoiceSorter: true, _srcFile: srcFile || '', _sortedAt: stamp
+      });
+      saveF('ld2', dels);
+      return { status: 'added' };
     }
 
-    return false;
-  } catch(e) {
+    return { status: 'notSaved' };
+  } catch (e) {
     console.error('sync error', e);
-    return false;
+    return { status: 'error', error: e.message };
   }
 }
 
@@ -625,97 +690,98 @@ function renderApprovalCard(r, index) {
   const card = document.createElement('div');
   card.className = 'approval-card';
   card.id = `card-${index}`;
+  const escA = s => String(s ?? '').replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
 
-  const supplierOptions = ['עמיר','המשביר','ICL','דשנים'].map(s =>
-    `<option value="${s}" ${(info.knownSupplier||info.supplier)===s?'selected':''}>${s}</option>`
-  ).join('');
+  const detected = (info.knownSupplier || info.supplier || '').trim();
+  const sups = farmSuppliers().slice(0, 60);
+  const supplierOptions = [detected && !sups.includes(detected) ? detected : null, ...sups].filter(Boolean)
+    .map(s => `<option value="${escA(s)}" ${s === detected ? 'selected' : ''}>${escA(s)}${s === detected && !sups.includes(s) ? ' (ספק חדש)' : ''}</option>`).join('');
+  const docTypeOptions = DOC_TYPES.map(t => `<option value="${t}" ${info.docType === t ? 'selected' : ''}>${t}</option>`).join('');
 
-  const docTypeOptions = ['חשבונית מס','תעודת משלוח','חשבונית זיכוי','הצעת מחיר'].map(t =>
-    `<option value="${t}" ${info.docType===t?'selected':''}>${t}</option>`
-  ).join('');
+  const existing = r.info ? findExisting({ ...info, supplier: detected }, info.docType) : null;
+  const receiptInv = info.docType === 'קבלה' ? findInvoiceForReceipt({ ...info, supplier: detected }) : null;
+
+  let notice = '';
+  if (r.isError) notice = `<div class="unknown-alert" style="margin-bottom:12px">❌ הניתוח נכשל: ${escA(r.error || '')}<br>אפשר למלא את הפרטים ידנית.</div>`;
+  else if (!r.info) notice = `<div class="unknown-alert" style="margin-bottom:12px">⚠️ לא זוהו נתונים — מלא ידנית.</div>`;
+  if (existing) notice += `<div class="unknown-alert" style="margin-bottom:12px">⚠️ כבר קיים במערכת: ${existing.kind} ${escA(existing.num)} מ-${escA(existing.date || '?')}${existing.total != null ? ` · ₪${Number(existing.total).toLocaleString()}` : ''}${existing.paid ? ' · שולמה' : ''}</div>`;
+  if (info.docType === 'קבלה') notice += receiptInv
+    ? `<div class="sync-success" style="margin:0 0 12px">🧾 קבלה עבור חשבונית ${escA(receiptInv.num)} (₪${Number(receiptInv.total || 0).toLocaleString()}) — ${receiptInv.paid ? 'החשבונית כבר מסומנת כשולמה' : 'באישור, החשבונית תסומן כשולמה'}</div>`
+    : `<div class="unknown-alert" style="margin-bottom:12px">🧾 קבלה${info.forInvoice ? ` עבור חשבונית ${escA(info.forInvoice)}` : ''} — החשבונית לא נמצאה במערכת. הקובץ יורד בלבד.</div>`;
+  if (!existing && detected && !sups.includes(detected)) notice += `<div class="unknown-alert" style="margin-bottom:12px">🆕 ספק חדש: "${escA(detected)}"</div>`;
 
   card.innerHTML = `
-    <div class="approval-title">✅ אשר ושמור — ${r.file.name}</div>
-
-    ${r.isUnknown && info.supplier ? `
-    <div class="unknown-alert" style="margin-bottom:12px">
-      ⚠️ ספק לא מוכר: "${info.supplier}"<br>
-      צור תיקייה: <code>חשבוניות/${info.supplier}</code>
-    </div>` : ''}
-
+    <div class="approval-title">✅ אשר ושמור — ${escA(r.file.name)}</div>
+    ${notice}
     <div class="field-group">
       <div class="field-label">ספק</div>
-      <select class="field-select" id="f-sup-${index}">
-        ${supplierOptions}
-        ${!info.knownSupplier && info.supplier ? `<option value="${info.supplier}" selected>${info.supplier}</option>` : ''}
-      </select>
+      <select class="field-select" id="f-sup-${index}">${supplierOptions}</select>
     </div>
-
     <div class="field-group">
       <div class="field-label">סוג מסמך</div>
       <select class="field-select" id="f-type-${index}">${docTypeOptions}</select>
     </div>
-
     <div class="field-group">
       <div class="field-label">מספר מסמך</div>
-      <input class="field-input" id="f-num-${index}" value="${info.docNumber||''}">
+      <input class="field-input" id="f-num-${index}" value="${escA(info.docNumber || '')}">
     </div>
-
     <div class="field-group">
-      <div class="field-label">תאריך (YYYY-MM-DD)</div>
-      <input class="field-input" id="f-date-${index}" value="${info.date||''}" dir="ltr">
+      <div class="field-label">תאריך</div>
+      <input class="field-input" id="f-date-${index}" type="date" value="${escA(/^\d{4}-\d{2}-\d{2}$/.test(info.date || '') ? info.date : '')}" dir="ltr">
     </div>
-
     <div class="field-group">
       <div class="field-label">סכום כולל מע"מ (₪)</div>
-      <input class="field-input" id="f-amount-${index}" value="${info.amount||''}" type="number" dir="ltr">
+      <input class="field-input" id="f-amount-${index}" value="${escA(info.amount || '')}" type="number" step="0.01" dir="ltr">
     </div>
-
+    <input type="hidden" id="f-for-${index}" value="${escA(info.forInvoice || '')}">
     <div class="save-box" style="margin-bottom:12px">
       <div class="save-label">📁 יישמר ב:</div>
-      <div class="save-path" id="f-path-${index}">חשבוניות/${info.knownSupplier||info.supplier||'?'}</div>
-      <div class="save-filename">${r.fileName}</div>
+      <div class="save-path" id="f-path-${index}">חשבוניות/${escA(detected || '?')}</div>
+      <div class="save-filename">${escA(r.fileName)}</div>
     </div>
-
-    <button class="btn-approve" onclick="approveAndSync(${index})">
-      ✅ אשר — שמור במערכת ובתיקייה
-    </button>
-    <button class="btn-download-only" onclick="downloadOnly(${index})">
-      ⬇️ הורד בלבד (ללא שמירה במערכת)
-    </button>
-    <div id="sync-result-${index}"></div>
-  `;
+    <button class="btn-approve" onclick="approveAndSync(${index})">${existing ? '⬇️ כבר קיים — הורד את הקובץ בלבד' : '✅ אשר — שמור במערכת ובתיקייה'}</button>
+    <button class="btn-download-only" onclick="downloadOnly(${index})">⬇️ הורד בלבד (ללא שמירה במערכת)</button>
+    <div id="sync-result-${index}"></div>`;
   return card;
 }
 
-// Global results store
 let _results = [];
 
 function approveAndSync(index) {
   const r = _results[index];
   const sup = document.getElementById(`f-sup-${index}`).value;
   const docType = document.getElementById(`f-type-${index}`).value;
-  const num = document.getElementById(`f-num-${index}`).value;
+  const num = document.getElementById(`f-num-${index}`).value.trim();
   const date = document.getElementById(`f-date-${index}`).value;
   const amount = document.getElementById(`f-amount-${index}`).value;
+  const forInvoice = document.getElementById(`f-for-${index}`).value;
+  const resultDiv = document.getElementById(`sync-result-${index}`);
+  if ((INVOICE_TYPES.includes(docType) || docType === 'תעודת משלוח') && (!num || !date || !sup)) {
+    resultDiv.innerHTML = `<div class="sync-success" style="color:var(--red)">⚠️ חסר ספק, מספר או תאריך</div>`;
+    return;
+  }
 
-  const finalInfo = { ...r.info, supplier: sup, knownSupplier: ['עמיר','המשביר','ICL','דשנים'].includes(sup)?sup:null, docType, docNumber: num, date, amount };
-  const fileName = `${sup}_${date}_${docType}_${num}.pdf`.replace(/\s+/g,'_');
+  const finalInfo = { ...(r.info || {}), supplier: sup, knownSupplier: farmSuppliers().includes(sup) ? sup : null, docType, docNumber: num, date, amount, forInvoice };
+  const fileName = buildFileName(finalInfo);
 
-  // Download with new name
   const url = URL.createObjectURL(r.file);
   const a = document.createElement('a');
   a.href = url; a.download = fileName; a.click();
-  URL.revokeObjectURL(url);
+  setTimeout(() => URL.revokeObjectURL(url), 1500);
 
-  // Sync to luria-farm
-  const synced = syncToLuriaFarm(finalInfo, docType);
-  const resultDiv = document.getElementById(`sync-result-${index}`);
-  resultDiv.innerHTML = synced
-    ? `<div class="sync-success">✅ נשמר במערכת ההוצאות ונורד לתיקייה חשבוניות/${sup}</div>`
-    : `<div class="sync-success" style="color:var(--gold)">⚠️ כבר קיים במערכת — הורד בלבד</div>`;
+  const res = syncToLuriaFarm(finalInfo, docType, r.file.name);
+  const ok = t => `<div class="sync-success">${t}</div>`;
+  const warn = t => `<div class="sync-success" style="color:var(--gold)">${t}</div>`;
+  resultDiv.innerHTML = ({
+    added: ok(`✅ נשמר במערכת ונורד לתיקייה חשבוניות/${sup}`),
+    paid: ok(`✅ חשבונית ${res.rec && res.rec.num} סומנה כשולמה (${date}) — הקבלה נורדה`),
+    alreadyPaid: warn('ℹ️ החשבונית כבר מסומנת כשולמה — הקבלה נורדה בלבד'),
+    noInvoice: warn('ℹ️ החשבונית של הקבלה לא נמצאה במערכת — הקובץ נורד בלבד'),
+    exists: warn('⚠️ כבר קיים במערכת — הקובץ נורד בלבד'),
+    notSaved: warn(`ℹ️ "${docType}" לא נשמר במערכת — הקובץ נורד בלבד`),
+    error: `<div class="sync-success" style="color:var(--red)">❌ שגיאה בשמירה: ${res.error || ''}</div>`
+  })[res.status];
 
-  // Disable buttons
   document.getElementById(`card-${index}`).querySelectorAll('button').forEach(b => b.disabled = true);
 }
 
