@@ -555,6 +555,8 @@ async function processFiles(files) {
 
 // ---- Reading the big system's data (same browser storage) ----
 const LF = k => { try { const v = JSON.parse(localStorage.getItem(k) || '[]'); return Array.isArray(v) ? v : []; } catch { return []; } };
+// One spelling for numbers like SI26607000567 / 26607000567SI: letters first.
+const canonNum = s => { s = String(s || '').trim(); const m = s.match(/^(\d+)\s*([A-Za-z]{1,3})$/); return m ? m[2].toUpperCase() + m[1] : s; };
 const normNum = s => String(s || '').replace(/\D/g, '').replace(/^0+/, '');
 const sameSup = (a, b) => { a = String(a || '').trim(); b = String(b || '').trim(); return !!a && !!b && (a === b || a.includes(b) || b.includes(a)); };
 const INVOICE_TYPES = ['חשבונית מס', 'חשבונית מס קבלה', 'חשבונית זיכוי'];
@@ -613,7 +615,7 @@ async function analyzeInvoice(file) {
   "supplier": "שם העסק שהנפיק את המסמך — לא אתרוגי לוריא",
   "knownSupplier": "אם זה אחד מהספקים ברשימה למטה — השם בדיוק כפי שהוא ברשימה, אחרת null",
   "docType": ${DOC_TYPES.map(t => '"' + t + '"').join(' | ')},
-  "docNumber": "מספר המסמך",
+  "docNumber": "מספר המסמך. אם יש בו אותיות לטיניות (כמו SI) — כתוב אותן לפני הספרות, למשל SI26607000567",
   "date": "תאריך המסמך בפורמט YYYY-MM-DD",
   "amount": "הסכום הסופי לתשלום כולל מע\\"מ — מספר בלבד",
   "forInvoice": "אם זו קבלה: מספר החשבונית שהיא משלמת, אחרת null"
@@ -671,7 +673,7 @@ function syncToLuriaFarm(info, docType, srcFile) {
     const [y, m] = date.split('-');
     const year = +y || 0, month = +m || 0;
     const sup = (info.supplier || '').trim();
-    const num = (info.docNumber || '').trim();
+    const num = canonNum(info.docNumber);
     const total = parseFloat(String(info.amount || '0').replace(/[^\d.\-]/g, '')) || 0;
     const stamp = new Date().toISOString();
 
@@ -770,7 +772,7 @@ function renderApprovalCard(r, index) {
     </div>
     <div class="field-group">
       <div class="field-label">מספר מסמך</div>
-      <input class="field-input" id="f-num-${index}" value="${escA(info.docNumber || '')}">
+      <input class="field-input" id="f-num-${index}" value="${escA(canonNum(info.docNumber))}" dir="ltr">
     </div>
     <div class="field-group">
       <div class="field-label">תאריך</div>
@@ -830,6 +832,14 @@ function showTab(t) {
   document.getElementById('tabbtn-list').classList.toggle('on', t === 'list');
   if (t === 'list') renderList(true);
 }
+// רענון אוטומטי של רשימת החשבוניות כשהמערכת הגדולה שומרת (בלשונית אחרת או דרך הענן)
+function _refreshListIfOpen() {
+  const tab = document.getElementById('tab-list');
+  if (tab && tab.style.display !== 'none') renderList(true);
+}
+window.addEventListener('storage', e => { if (!e.key || e.key === 'li2' || e.key === 'ld2') _refreshListIfOpen(); });
+window.addEventListener('luria-data-changed', _refreshListIfOpen);
+document.addEventListener('visibilitychange', () => { if (!document.hidden) _refreshListIfOpen(); });
 
 // ---- Invoices list ----
 function renderList(fillSuppliers) {
@@ -899,13 +909,29 @@ function dupGroups() {
   LF('li2').forEach((x, i) => { const n = normNum(x.num); if (!n) return; const k = String(x.sup || '').trim() + '|' + n; (g[k] = g[k] || []).push(i); });
   return Object.values(g).filter(a => a.length > 1);
 }
+function suffixNums() { return LF('li2').filter(x => canonNum(x.num) !== String(x.num || '').trim()); }
+function unifyNumbers() {
+  const list = suffixNums(); if (!list.length) return;
+  if (!confirm(`לאחד את הכתיב של ${list.length} מספרי חשבוניות — האותיות יעברו לתחילת המספר (למשל 26607000567SI ← SI26607000567)?\nגם התעודות המקושרות יתעדכנו. קודם יורד קובץ גיבוי.`)) return;
+  const blob = new Blob([JSON.stringify({ li2: localStorage.getItem('li2'), ld2: localStorage.getItem('ld2') })], { type: 'application/json' });
+  const a = document.createElement('a'); a.href = URL.createObjectURL(blob);
+  a.download = `luria-invoices-before-unify_${new Date().toISOString().slice(0, 16).replace(/[:T]/g, '-')}.json`; a.click();
+  const invs = LF('li2'), dels = LF('ld2'); const map = {};
+  invs.forEach(x => { const c = canonNum(x.num); if (c !== String(x.num || '').trim()) { map[String(x.num)] = c; x.num = c; } });
+  dels.forEach(d => { if (map[String(d.invNum || '')]) d.invNum = map[String(d.invNum)]; });
+  localStorage.setItem('ld2', JSON.stringify(dels));
+  localStorage.setItem('li2', JSON.stringify(invs));
+  renderList(true);
+}
 function renderDupBar() {
   const groups = dupGroups();
   const bar = document.getElementById('ls-dupbar');
-  if (!groups.length) { bar.innerHTML = ''; dupOpen = false; return false; }
+  const sfx = suffixNums().length;
+  const unifyBtn = sfx ? `<div class="dup-bar unify" style="background:rgba(201,168,76,.08);border-color:rgba(201,168,76,.4)" onclick="unifyNumbers()">🔤 ${sfx} מספרי חשבוניות כתובים עם האותיות בסוף (כמו 26607000567SI). לחץ לאיחוד הכתיב — האותיות יעברו להתחלה.</div>` : '';
+  if (!groups.length) { bar.innerHTML = unifyBtn; dupOpen = false; return false; }
   const invs = LF('li2');
   const extra = groups.reduce((t, g) => t + g.slice(1).reduce((u, i) => u + (Number(invs[i].total) || 0), 0), 0);
-  bar.innerHTML = `<div class="dup-bar" onclick="dupOpen=!dupOpen;renderList()">⚠️ נמצאו <b>${groups.length}</b> חשבוניות שמופיעות פעמיים (אותו מספר בכתיב שונה) — עד ₪${Math.round(extra).toLocaleString()} נספרים כפול. ${dupOpen ? 'לחץ לסגירה ▲' : 'לחץ לבדיקה ▼'}</div>`;
+  bar.innerHTML = unifyBtn + `<div class="dup-bar" onclick="dupOpen=!dupOpen;renderList()">⚠️ נמצאו <b>${groups.length}</b> חשבוניות שמופיעות פעמיים (אותו מספר בכתיב שונה) — עד ₪${Math.round(extra).toLocaleString()} נספרים כפול. ${dupOpen ? 'לחץ לסגירה ▲' : 'לחץ לבדיקה ▼'}</div>`;
   return dupOpen;
 }
 function renderDups() {
@@ -1319,6 +1345,7 @@ function applyRemote(force){
   writeLocal(L); saveBase(B);
   remoteWaiting = false; $('cloud-remote-banner').style.display = 'none';
   if(PAGE === 'farm') safeReload();
+  else window.dispatchEvent(new Event('luria-data-changed'));
 }
 function safeReload(){
   const now = Date.now();
