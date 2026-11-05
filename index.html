@@ -276,6 +276,19 @@ h1 { font-size: 24px; font-weight: 900; color: var(--gold); }
 .mbg .btn{padding:8px 16px;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit}
 .mbg .btnP{background:#2d5a27;color:#fff;border:none}
 .mbg .btnS{background:#f4f4f0;color:#555;border:1.5px solid #ddd}
+/* tabs + list */
+.tabs{display:flex;gap:8px;margin:0 0 16px}
+.tab{flex:1;padding:11px 8px;border-radius:12px;border:1px solid rgba(255,255,255,.12);background:rgba(255,255,255,.04);color:rgba(255,255,255,.7);font-family:'Heebo',sans-serif;font-size:14px;font-weight:600;cursor:pointer}
+.tab.on{background:rgba(201,168,76,.15);border-color:rgba(201,168,76,.5);color:var(--gold-light)}
+.inv-row{background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.08);border-radius:12px;padding:10px 12px;margin-bottom:8px;display:flex;align-items:center;gap:10px}
+.inv-main{flex:1;min-width:0}
+.inv-sup{font-weight:700;font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.inv-sub{font-size:12px;color:rgba(255,255,255,.55);margin-top:2px}
+.inv-amt{font-weight:700;font-size:14px;white-space:nowrap;direction:ltr}
+.inv-btn{border:1px solid rgba(82,183,136,.5);background:rgba(82,183,136,.12);color:var(--light);border-radius:8px;padding:6px 10px;font-size:12px;font-family:inherit;cursor:pointer;white-space:nowrap;text-decoration:none}
+.inv-btn.add{border-color:rgba(201,168,76,.5);background:rgba(201,168,76,.1);color:var(--gold)}
+.badge-paid{font-size:11px;color:var(--light)}
+.badge-unpaid{font-size:11px;color:var(--gold)}
 </style>
 </head>
 <body>
@@ -288,6 +301,11 @@ h1 { font-size: 24px; font-weight: 900; color: var(--gold); }
   <p class="subtitle">העלה PDF — המערכת תזהה ותגיד לאן לשמור</p>
 </div>
 
+<div class="tabs">
+  <button class="tab on" id="tabbtn-in" onclick="showTab('in')">📥 קליטת מסמך</button>
+  <button class="tab" id="tabbtn-list" onclick="showTab('list')">📋 חשבוניות במערכת</button>
+</div>
+<div id="tab-in">
 <!-- Folder structure guide -->
 <div class="folder-guide">
   <div class="folder-guide-title">📱 מבנה תיקיות בטלפון:</div>
@@ -345,6 +363,25 @@ h1 { font-size: 24px; font-weight: 900; color: var(--gold); }
 <div id="resultsSection" style="display:none">
   <div class="results-title" id="resultsTitle"></div>
   <div id="resultsList"></div>
+</div>
+</div>
+
+<div id="tab-list" style="display:none">
+  <div class="folder-guide" style="padding:14px">
+    <input class="field-input" id="ls-search" placeholder="🔎 חיפוש לפי ספק או מספר" oninput="renderList()">
+    <div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap">
+      <select class="field-select" id="ls-sup" style="flex:1;min-width:150px" onchange="renderList()"></select>
+      <select class="field-select" id="ls-filter" style="flex:1;min-width:150px" onchange="renderList()">
+        <option value="">כל החשבוניות</option>
+        <option value="nofolder">רק בלי קישור לדרייב</option>
+        <option value="unpaid">רק שלא שולמו</option>
+        <option value="sorter">רק שנקלטו כאן</option>
+      </select>
+    </div>
+    <div id="ls-supbox"></div>
+  </div>
+  <div id="ls-summary" class="results-title"></div>
+  <div id="ls-rows"></div>
 </div>
 
 <script>
@@ -636,8 +673,9 @@ function syncToLuriaFarm(info, docType, srcFile) {
       const n = normNum(info.forInvoice);
       const inv = n && invs.find(x => normNum(x.num) === n && sameSup(x.sup, sup));
       if (!inv) return { status: 'noInvoice' };
-      if (inv.paid) return { status: 'alreadyPaid', rec: inv };
+      if (inv.paid){ if (info.driveFolder && !inv._driveFolder){ inv._driveFolder = info.driveFolder; saveF('li2', invs); } return { status: 'alreadyPaid', rec: inv }; }
       inv.paid = true; inv.paidDate = date; inv._receiptNum = num;
+      if (info.driveFolder && !inv._driveFolder) inv._driveFolder = info.driveFolder;
       saveF('li2', invs);
       return { status: 'paid', rec: inv };
     }
@@ -656,7 +694,8 @@ function syncToLuriaFarm(info, docType, srcFile) {
         direct: true,
         paid: paidNow,
         paidDate: paidNow ? date : '',
-        _fromInvoiceSorter: true, _srcFile: srcFile || '', _sortedAt: stamp
+        _fromInvoiceSorter: true, _srcFile: srcFile || '', _sortedAt: stamp,
+        ...(info.driveFolder ? { _driveFolder: info.driveFolder } : {})
       });
       saveF('li2', invs);
       return { status: 'added' };
@@ -672,7 +711,8 @@ function syncToLuriaFarm(info, docType, srcFile) {
         sup, doc: num, date, year: y || '',
         items: [{ id: 's' + Date.now(), product: 'תעודה ממיון חשבוניות — לפרט', qty: 1, price: net, discount: 0, total: net, vat: r2(total - net), totalV: total, cat: '' }],
         invNum: '', ts: Date.now(),
-        _fromInvoiceSorter: true, _srcFile: srcFile || '', _sortedAt: stamp
+        _fromInvoiceSorter: true, _srcFile: srcFile || '', _sortedAt: stamp,
+        ...(info.driveFolder ? { _driveFolder: info.driveFolder } : {})
       });
       saveF('ld2', dels);
       return { status: 'added' };
@@ -715,7 +755,7 @@ function renderApprovalCard(r, index) {
     ${notice}
     <div class="field-group">
       <div class="field-label">ספק</div>
-      <select class="field-select" id="f-sup-${index}">${supplierOptions}</select>
+      <select class="field-select" id="f-sup-${index}" onchange="onSupChange(${index})">${supplierOptions}</select>
     </div>
     <div class="field-group">
       <div class="field-label">סוג מסמך</div>
@@ -734,6 +774,11 @@ function renderApprovalCard(r, index) {
       <input class="field-input" id="f-amount-${index}" value="${escA(info.amount || '')}" type="number" step="0.01" dir="ltr">
     </div>
     <input type="hidden" id="f-for-${index}" value="${escA(info.forInvoice || '')}">
+    <div class="field-group">
+      <div class="field-label">📁 קישור לתיקייה בדרייב (לא חובה)</div>
+      <input class="field-input" id="f-drive-${index}" value="${escA(driveFolderFor(detected))}" placeholder="הדבק כאן קישור לתיקייה של הספק" dir="ltr" oninput="this.dataset.touched=1">
+      <div class="field-label" style="margin-top:4px">${driveFolderFor(detected) ? 'מולא אוטומטית מהחשבונית הקודמת של הספק' : 'מספיק פעם אחת לכל ספק — בפעם הבאה זה יתמלא לבד'}</div>
+    </div>
     <div class="save-box" style="margin-bottom:12px">
       <div class="save-label">📁 יישמר ב:</div>
       <div class="save-path" id="f-path-${index}">חשבוניות/${escA(detected || '?')}</div>
@@ -748,6 +793,106 @@ function renderApprovalCard(r, index) {
 
 let _results = [];
 
+// ---- Drive folder links (stored on the invoices themselves) ----
+function cleanDriveLink(v) {
+  v = String(v || '').trim();
+  if (!v) return '';
+  const m = v.match(/https?:\/\/\S+/);
+  return m ? m[0] : '';
+}
+// The folder link used last time for this supplier.
+function driveFolderFor(sup) {
+  if (!sup) return '';
+  const all = [...LF('li2'), ...LF('ld2')].filter(x => x && x._driveFolder && sameSup(x.sup, sup));
+  all.sort((a, b) => String(b._sortedAt || b.date || '').localeCompare(String(a._sortedAt || a.date || '')));
+  return all.length ? all[0]._driveFolder : '';
+}
+function onSupChange(i) {
+  const f = document.getElementById(`f-drive-${i}`);
+  if (f && !f.dataset.touched) f.value = driveFolderFor(document.getElementById(`f-sup-${i}`).value);
+}
+
+// ---- Tabs ----
+function showTab(t) {
+  document.getElementById('tab-in').style.display = t === 'in' ? '' : 'none';
+  document.getElementById('tab-list').style.display = t === 'list' ? '' : 'none';
+  document.getElementById('tabbtn-in').classList.toggle('on', t === 'in');
+  document.getElementById('tabbtn-list').classList.toggle('on', t === 'list');
+  if (t === 'list') renderList(true);
+}
+
+// ---- Invoices list ----
+function renderList(fillSuppliers) {
+  const e = s => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;');
+  const invs = LF('li2');
+  const supSel = document.getElementById('ls-sup');
+  if (fillSuppliers || !supSel.options.length) {
+    const cur = supSel.value;
+    const counts = {};
+    invs.forEach(x => { const s = String(x.sup || '').trim(); if (s) counts[s] = (counts[s] || 0) + 1; });
+    supSel.innerHTML = `<option value="">כל הספקים</option>` + Object.keys(counts).sort((a, b) => counts[b] - counts[a]).map(s => `<option value="${e(s)}">${e(s)} (${counts[s]})</option>`).join('');
+    supSel.value = cur;
+  }
+  const q = document.getElementById('ls-search').value.trim();
+  const sup = supSel.value;
+  const flt = document.getElementById('ls-filter').value;
+  let list = invs.map((x, i) => ({ x, i })).filter(({ x }) =>
+    (!sup || x.sup === sup) &&
+    (!q || String(x.sup || '').includes(q) || String(x.num || '').includes(q)) &&
+    (flt !== 'nofolder' || !x._driveFolder) &&
+    (flt !== 'unpaid' || !x.paid) &&
+    (flt !== 'sorter' || x._fromInvoiceSorter));
+  list.sort((a, b) => String(b.x.date || '').localeCompare(String(a.x.date || '')));
+  const total = list.reduce((t, { x }) => t + (Number(x.total) || 0), 0);
+  const noFolder = list.filter(({ x }) => !x._driveFolder).length;
+  document.getElementById('ls-summary').textContent = `${list.length} חשבוניות · ₪${total.toLocaleString('he-IL', { maximumFractionDigits: 2 })}${noFolder ? ` · ${noFolder} בלי קישור לדרייב` : ''}`;
+
+  // one-tap link for a whole supplier
+  const box = document.getElementById('ls-supbox');
+  if (sup) {
+    const missing = invs.filter(x => x.sup === sup && !x._driveFolder).length;
+    const link = driveFolderFor(sup);
+    box.innerHTML = `<div style="margin-top:10px;font-size:13px;color:rgba(255,255,255,.75)">
+      ${link ? `📁 תיקיית הספק: <a class="inv-btn" href="${e(link)}" target="_blank" rel="noopener">פתח בדרייב</a>` : '📁 לספק הזה עדיין אין תיקייה'}
+      <button class="inv-btn add" style="margin-right:6px" onclick="setSupplierFolder()">${link ? '✏️ שנה' : '➕ הוסף'} קישור${missing ? ` (יוחל על ${missing} חשבוניות בלי קישור)` : ''}</button></div>`;
+  } else box.innerHTML = '';
+
+  const rows = list.slice(0, 300).map(({ x, i }) => `
+    <div class="inv-row">
+      <div class="inv-main">
+        <div class="inv-sup">${e(x.sup || '—')}</div>
+        <div class="inv-sub">${e(x.date || '')} · מס' ${e(x.num || '')} · <span class="${x.paid ? 'badge-paid' : 'badge-unpaid'}">${x.paid ? 'שולמה' : 'לא שולמה'}</span>${x._fromInvoiceSorter ? ' · 📥' : ''}</div>
+      </div>
+      <div class="inv-amt">₪${(Number(x.total) || 0).toLocaleString('he-IL', { maximumFractionDigits: 2 })}</div>
+      ${x._driveFolder ? `<a class="inv-btn" href="${e(x._driveFolder)}" target="_blank" rel="noopener">📁 דרייב</a>` : `<button class="inv-btn add" onclick="setInvoiceFolder(${i})">➕ קישור</button>`}
+    </div>`).join('');
+  document.getElementById('ls-rows').innerHTML = rows || '<div class="folder-guide" style="text-align:center">אין חשבוניות להצגה</div>';
+}
+function askLink(current) {
+  const v = prompt('הדבק קישור לתיקייה בדרייב (בדרייב: ⋮ ליד התיקייה ← שיתוף ← העתק קישור):', current || '');
+  if (v === null) return null;
+  const link = cleanDriveLink(v);
+  if (!link) { alert('זה לא נראה כמו קישור. נסה שוב.'); return null; }
+  return link;
+}
+function setInvoiceFolder(i) {
+  const invs = LF('li2'); const x = invs[i]; if (!x) return;
+  const link = askLink(driveFolderFor(x.sup));
+  if (!link) return;
+  x._driveFolder = link;
+  localStorage.setItem('li2', JSON.stringify(invs));
+  renderList();
+}
+function setSupplierFolder() {
+  const sup = document.getElementById('ls-sup').value; if (!sup) return;
+  const link = askLink(driveFolderFor(sup));
+  if (!link) return;
+  const invs = LF('li2'); let n = 0;
+  invs.forEach(x => { if (x.sup === sup && (!x._driveFolder || x._driveFolder === driveFolderFor(sup))) { x._driveFolder = link; n++; } });
+  localStorage.setItem('li2', JSON.stringify(invs));
+  renderList();
+}
+
 function approveAndSync(index, noDownload) {
   const r = _results[index];
   const sup = document.getElementById(`f-sup-${index}`).value;
@@ -756,13 +901,14 @@ function approveAndSync(index, noDownload) {
   const date = document.getElementById(`f-date-${index}`).value;
   const amount = document.getElementById(`f-amount-${index}`).value;
   const forInvoice = document.getElementById(`f-for-${index}`).value;
+  const driveFolder = cleanDriveLink(document.getElementById(`f-drive-${index}`).value);
   const resultDiv = document.getElementById(`sync-result-${index}`);
   if ((INVOICE_TYPES.includes(docType) || docType === 'תעודת משלוח') && (!num || !date || !sup)) {
     resultDiv.innerHTML = `<div class="sync-success" style="color:var(--red)">⚠️ חסר ספק, מספר או תאריך</div>`;
     return;
   }
 
-  const finalInfo = { ...(r.info || {}), supplier: sup, knownSupplier: farmSuppliers().includes(sup) ? sup : null, docType, docNumber: num, date, amount, forInvoice };
+  const finalInfo = { ...(r.info || {}), supplier: sup, knownSupplier: farmSuppliers().includes(sup) ? sup : null, docType, docNumber: num, date, amount, forInvoice, driveFolder };
   const fileName = buildFileName(finalInfo);
 
   if (!noDownload) {
