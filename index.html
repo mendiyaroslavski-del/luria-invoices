@@ -740,6 +740,7 @@ function renderApprovalCard(r, index) {
       <div class="save-filename">${escA(r.fileName)}</div>
     </div>
     <button class="btn-approve" onclick="approveAndSync(${index})">${existing ? '⬇️ כבר קיים — הורד את הקובץ בלבד' : '✅ אשר — שמור במערכת ובתיקייה'}</button>
+    ${existing ? '' : `<button class="btn-download-only" style="border-color:var(--light);color:var(--light)" onclick="approveAndSync(${index}, true)">💾 שמור במערכת בלבד (הקובץ כבר שמור אצלי)</button>`}
     <button class="btn-download-only" onclick="downloadOnly(${index})">⬇️ הורד בלבד (ללא שמירה במערכת)</button>
     <div id="sync-result-${index}"></div>`;
   return card;
@@ -747,7 +748,7 @@ function renderApprovalCard(r, index) {
 
 let _results = [];
 
-function approveAndSync(index) {
+function approveAndSync(index, noDownload) {
   const r = _results[index];
   const sup = document.getElementById(`f-sup-${index}`).value;
   const docType = document.getElementById(`f-type-${index}`).value;
@@ -764,21 +765,23 @@ function approveAndSync(index) {
   const finalInfo = { ...(r.info || {}), supplier: sup, knownSupplier: farmSuppliers().includes(sup) ? sup : null, docType, docNumber: num, date, amount, forInvoice };
   const fileName = buildFileName(finalInfo);
 
-  const url = URL.createObjectURL(r.file);
-  const a = document.createElement('a');
-  a.href = url; a.download = fileName; a.click();
-  setTimeout(() => URL.revokeObjectURL(url), 1500);
+  if (!noDownload) {
+    const url = URL.createObjectURL(r.file);
+    const a = document.createElement('a');
+    a.href = url; a.download = fileName; a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1500);
+  }
 
   const res = syncToLuriaFarm(finalInfo, docType, r.file.name);
   const ok = t => `<div class="sync-success">${t}</div>`;
   const warn = t => `<div class="sync-success" style="color:var(--gold)">${t}</div>`;
   resultDiv.innerHTML = ({
-    added: ok(`✅ נשמר במערכת ונורד לתיקייה חשבוניות/${sup}`),
-    paid: ok(`✅ חשבונית ${res.rec && res.rec.num} סומנה כשולמה (${date}) — הקבלה נורדה`),
-    alreadyPaid: warn('ℹ️ החשבונית כבר מסומנת כשולמה — הקבלה נורדה בלבד'),
-    noInvoice: warn('ℹ️ החשבונית של הקבלה לא נמצאה במערכת — הקובץ נורד בלבד'),
-    exists: warn('⚠️ כבר קיים במערכת — הקובץ נורד בלבד'),
-    notSaved: warn(`ℹ️ "${docType}" לא נשמר במערכת — הקובץ נורד בלבד`),
+    added: ok(noDownload ? '✅ נשמר במערכת' : `✅ נשמר במערכת ונורד לתיקייה חשבוניות/${sup}`),
+    paid: ok(`✅ חשבונית ${res.rec && res.rec.num} סומנה כשולמה (${date})`),
+    alreadyPaid: warn('ℹ️ החשבונית כבר מסומנת כשולמה'),
+    noInvoice: warn('ℹ️ החשבונית של הקבלה לא נמצאה במערכת'),
+    exists: warn('⚠️ כבר קיים במערכת'),
+    notSaved: warn(`ℹ️ "${docType}" לא נשמר במערכת`),
     error: `<div class="sync-success" style="color:var(--red)">❌ שגיאה בשמירה: ${res.error || ''}</div>`
   })[res.status];
 
