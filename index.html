@@ -289,6 +289,11 @@ h1 { font-size: 24px; font-weight: 900; color: var(--gold); }
 .inv-btn.add{border-color:rgba(201,168,76,.5);background:rgba(201,168,76,.1);color:var(--gold)}
 .badge-paid{font-size:11px;color:var(--light)}
 .badge-unpaid{font-size:11px;color:var(--gold)}
+.dup-bar{background:rgba(224,82,82,.1);border:1px solid rgba(224,82,82,.4);border-radius:12px;padding:12px 14px;margin-bottom:12px;font-size:14px;cursor:pointer}
+.dup-group{border:1px solid rgba(201,168,76,.35);border-radius:14px;padding:12px;margin-bottom:14px;background:rgba(201,168,76,.04)}
+.dup-rec{background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.08);border-radius:10px;padding:10px;margin-top:8px;font-size:13px;line-height:1.7}
+.dup-rec.best{border-color:rgba(82,183,136,.6)}
+.dup-warn{color:#ff9a9a;font-size:13px;margin-top:6px}
 </style>
 </head>
 <body>
@@ -381,6 +386,7 @@ h1 { font-size: 24px; font-weight: 900; color: var(--gold); }
     </div>
     <div id="ls-supbox"></div>
   </div>
+  <div id="ls-dupbar"></div>
   <div id="ls-summary" class="results-title"></div>
   <div id="ls-rows"></div>
 </div>
@@ -870,6 +876,7 @@ function renderList(fillSuppliers) {
       <button class="inv-btn add" style="margin-right:6px" onclick="setSupplierFolder()">${link ? '✏️ שנה' : '➕ הוסף'} קישור${year ? ' ל-' + year : ''}${missing ? ` (יוחל על ${missing} חשבוניות בלי קישור)` : ''}</button></div>`;
   } else box.innerHTML = '';
 
+  if (renderDupBar()) { renderDups(); return; }
   const rows = list.slice(0, 300).map(({ x, i }) => `
     <div class="inv-row">
       <div class="inv-main">
@@ -881,6 +888,75 @@ function renderList(fillSuppliers) {
     </div>`).join('');
   document.getElementById('ls-rows').innerHTML = rows || '<div class="folder-guide" style="text-align:center">אין חשבוניות להצגה</div>';
 }
+// ---- Duplicate invoices (same supplier + same number written differently, e.g. SI123 / 123SI) ----
+let dupOpen = false;
+function invoiceLinks(x, dels, exps) {
+  const byNum = dels.filter(d => String(d.invNum || '') === String(x.num)).length;
+  return { dels: Math.max(byNum, (x.docIds || []).length), exp: exps.filter(e => String(e._invId) === String(x.id)).length };
+}
+function dupGroups() {
+  const g = {};
+  LF('li2').forEach((x, i) => { const n = normNum(x.num); if (!n) return; const k = String(x.sup || '').trim() + '|' + n; (g[k] = g[k] || []).push(i); });
+  return Object.values(g).filter(a => a.length > 1);
+}
+function renderDupBar() {
+  const groups = dupGroups();
+  const bar = document.getElementById('ls-dupbar');
+  if (!groups.length) { bar.innerHTML = ''; dupOpen = false; return false; }
+  const invs = LF('li2');
+  const extra = groups.reduce((t, g) => t + g.slice(1).reduce((u, i) => u + (Number(invs[i].total) || 0), 0), 0);
+  bar.innerHTML = `<div class="dup-bar" onclick="dupOpen=!dupOpen;renderList()">⚠️ נמצאו <b>${groups.length}</b> חשבוניות שמופיעות פעמיים (אותו מספר בכתיב שונה) — עד ₪${Math.round(extra).toLocaleString()} נספרים כפול. ${dupOpen ? 'לחץ לסגירה ▲' : 'לחץ לבדיקה ▼'}</div>`;
+  return dupOpen;
+}
+function renderDups() {
+  const e = s => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;');
+  const invs = LF('li2'), dels = LF('ld2'), exps = LF('lex2');
+  const html = dupGroups().map(g => {
+    const recs = g.map(i => ({ i, x: invs[i], l: invoiceLinks(invs[i], dels, exps) }));
+    const best = recs.slice().sort((a, b) => (b.l.dels + b.l.exp) - (a.l.dels + a.l.exp))[0].i;
+    const amounts = new Set(recs.map(r => Number(r.x.total).toFixed(2)));
+    const tricky = recs.some(r => r.x.direct || r.l.exp) && recs.some(r => r.l.dels);
+    return `<div class="dup-group">
+      <b>${e(recs[0].x.sup)}</b> — מספר ${e(normNum(recs[0].x.num))}
+      ${amounts.size > 1 ? `<div class="dup-warn">⚠️ הסכומים שונים — ייתכן שאלה שתי חשבוניות שונות. מזג רק אם בדקת בחשבונית עצמה.</div>` : ''}
+      ${tricky ? `<div class="dup-warn">⚠️ אחת מהן היא חשבונית ישירה / מקושרת להוצאה, והשנייה מקושרת לתעודות — כדאי לבדוק במערכת הגדולה לפני מיזוג.</div>` : ''}
+      ${recs.map(r => `<div class="dup-rec ${r.i === best && amounts.size === 1 && !tricky ? 'best' : ''}">
+        ${r.i === best && amounts.size === 1 && !tricky ? '⭐ <b>מומלץ להשאיר</b><br>' : ''}
+        מס' <b>${e(r.x.num)}</b> · ${e(r.x.date || '')} · ₪${(Number(r.x.total) || 0).toLocaleString()}<br>
+        ${r.l.dels} תעודות מקושרות${r.l.exp ? ` · מקושרת להוצאה` : ''}${r.x.direct ? ' · חשבונית ישירה' : ''} · ${r.x.paid ? 'שולמה' : 'לא שולמה'}
+        <div style="margin-top:6px"><button class="inv-btn" onclick="mergeInto(${r.i}, [${g.filter(j => j !== r.i).join(',')}])">✅ השאר את זו ומזג את השנייה לתוכה</button></div>
+      </div>`).join('')}
+    </div>`;
+  }).join('');
+  document.getElementById('ls-rows').innerHTML = `<div class="folder-guide" style="font-size:13px;line-height:1.7">במיזוג: התעודות, ההוצאה וקישור הדרייב של החשבונית הכפולה עוברים לחשבונית שנשארת, והכפולה נמחקת. לפני המיזוג הראשון יורד קובץ גיבוי.</div>` + html;
+}
+let mergeBackupDone = false;
+function mergeInto(keepIdx, dropIdxs) {
+  const invs = LF('li2'), dels = LF('ld2'), exps = LF('lex2');
+  const keep = invs[keepIdx]; const drops = dropIdxs.map(i => invs[i]);
+  if (!keep || drops.some(d => !d)) return;
+  if (!confirm(`להשאיר את ${keep.num} (₪${Number(keep.total).toLocaleString()}) ולמזג לתוכה את ${drops.map(d => d.num).join(', ')}?`)) return;
+  if (!mergeBackupDone) {
+    const blob = new Blob([JSON.stringify({ li2: localStorage.getItem('li2'), ld2: localStorage.getItem('ld2'), lex2: localStorage.getItem('lex2') })], { type: 'application/json' });
+    const a = document.createElement('a'); a.href = URL.createObjectURL(blob);
+    a.download = `luria-invoices-before-merge_${new Date().toISOString().slice(0, 16).replace(/[:T]/g, '-')}.json`; a.click();
+    mergeBackupDone = true;
+  }
+  const docIds = new Set((keep.docIds || []).map(String));
+  drops.forEach(d => {
+    (d.docIds || []).forEach(id => { if (!docIds.has(String(id))) { (keep.docIds = keep.docIds || []).push(id); docIds.add(String(id)); } });
+    dels.forEach(x => { if (String(x.invNum || '') === String(d.num)) x.invNum = keep.num; });
+    exps.forEach(x => { if (String(x._invId) === String(d.id)) x._invId = keep.id; });
+    if (!keep._driveFolder && d._driveFolder) keep._driveFolder = d._driveFolder;
+    if (!keep.paid && d.paid) { keep.paid = true; keep.paidDate = d.paidDate || ''; }
+  });
+  const dropSet = new Set(drops);
+  localStorage.setItem('ld2', JSON.stringify(dels));
+  localStorage.setItem('lex2', JSON.stringify(exps));
+  localStorage.setItem('li2', JSON.stringify(invs.filter(x => !dropSet.has(x))));
+  renderList(true);
+}
+
 function askLink(current) {
   const v = prompt('הדבק קישור לתיקייה בדרייב (בדרייב: ⋮ ליד התיקייה ← שיתוף ← העתק קישור):', current || '');
   if (v === null) return null;
