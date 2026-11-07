@@ -385,6 +385,7 @@ h1 { font-size: 24px; font-weight: 900; color: var(--gold); }
       </select>
     </div>
     <button class="inv-btn add" style="margin-top:8px;width:100%;padding:10px;font-size:14px" onclick="autoLinkDrive()">🔗 קשר אוטומטית לתיקיות בדרייב</button>
+    <button class="inv-btn add" style="margin-top:8px;width:100%;padding:10px;font-size:14px;background:#fff3e0;color:#8a4b00;border-color:#f0b060" onclick="cleanDuplicates()">🧹 ניקוי כפילויות (חד-פעמי)</button>
     <label class="inv-btn add" style="margin-top:8px;width:100%;padding:10px;font-size:14px;display:block;text-align:center;box-sizing:border-box;cursor:pointer">📥 ייבוא חשבוניות מהדרייב (קובץ מ-Claude)<input type="file" accept=".json,application/json" style="display:none" onchange="if(this.files[0])importDriveFile(this.files[0]);this.value=''"></label>
     <div id="ls-supbox"></div>
   </div>
@@ -558,6 +559,8 @@ async function processFiles(files) {
 // ---- Reading the big system's data (same browser storage) ----
 const LF = k => { try { const v = JSON.parse(localStorage.getItem(k) || '[]'); return Array.isArray(v) ? v : []; } catch { return []; } };
 // One spelling for numbers like SI26607000567 / 26607000567SI: letters first.
+let _uidN = 0;
+const uid = () => Date.now() * 1000 + (++_uidN % 1000) + Math.floor(Math.random() * 1000) / 1000;
 const canonNum = s => { s = String(s || '').trim(); const m = s.match(/^(\d+)\s*([A-Za-z]{1,3})$/); return m ? m[2].toUpperCase() + m[1] : s; };
 const normNum = s => String(s || '').replace(/\D/g, '').replace(/^0+/, '');
 const sameSup = (a, b) => { a = String(a || '').trim(); b = String(b || '').trim(); return !!a && !!b && (a === b || a.includes(b) || b.includes(a)); };
@@ -869,8 +872,8 @@ function importDriveFile(file) {
       const [y, m] = String(r.date || '').split('-');
       const amount = r.docType === 'חשבונית זיכוי' ? -Math.abs(+r.amount || 0) : (+r.amount || 0);
       const isPaid = r.docType === 'חשבונית מס קבלה' || !!r.paid;
-      pending.push({ id: Date.now() + Math.random(), num: canonNum(r.docNumber || ''), date: r.date || '', sup: r.supplier, month: +m || 0, year: +y || 0,
-        total: amount, docIds: [], directItems: [{ id: Date.now() + Math.random(), desc: `${r.docType} ${r.docNumber || ''} (מהדרייב)`, amount }],
+      pending.push({ id: uid(), num: canonNum(r.docNumber || ''), date: r.date || '', sup: r.supplier, month: +m || 0, year: +y || 0,
+        total: amount, docIds: [], directItems: [{ id: uid(), desc: `${r.docType} ${r.docNumber || ''} (מהדרייב)`, amount }],
         direct: true, paid: isPaid, paidDate: isPaid ? (r.paidDate || r.date || '') : '',
         _fromInvoiceSorter: true, _fromDrive: true, _sortedAt: stamp, _srcFile: r.fileName || '',
         ...(r.driveFile ? { _driveFile: r.driveFile } : {}), ...(r.driveFolder ? { _driveFolder: r.driveFolder } : {}) });
@@ -893,6 +896,58 @@ function importDriveFile(file) {
     alert(`✅ הייבוא הסתיים: נוספו ${add}, קושרו ${link}, סומנו כשולמו ${paid}`);
   };
   rd.readAsText(file);
+}
+// ---- ניקוי כפילויות חד-פעמי (נובמבר 2026) ----
+// תעודות משלוח שנרשמו פעמיים מול חשבונית עמיר SI26607001400 (נבדק מול סכום החשבונית)
+const DUP_DEL_IDS = ['1776852986523.0122', '1778683090448.4907'];
+function planDuplicates() {
+  const invs = LF('li2'), dels = LF('ld2'), exps = LF('lex2');
+  const ns = s => String(s || '').trim().replace(/\s+/g, ' ').replace(/בע"?מ$/, '').trim();
+  const invNo = e => { const m = String(e.notes || '').match(/חשבונית ישירה\s+(\S+)/); return m ? canonNum(m[1]) : ''; };
+  // 1. הוצאות כפולות
+  const ichNums = new Set(exps.filter(e => ns(e.sup) === 'איכותית').map(invNo).filter(Boolean));
+  const seen = new Map(), expDrop = new Set(); let expAmir = 0;
+  exps.forEach((e, i) => {
+    const n = invNo(e);
+    if (ns(e.sup) === 'עמיר' && n && /^01\/0\d+$/.test(n) && ichNums.has(n)) { expDrop.add(i); expAmir++; return; }
+    const k = n ? ns(e.sup) + '|' + n + '|' + Math.round(+e.amount || 0) : [ns(e.sup), String(e.date || '').slice(0, 10), Math.round((+e.amount || 0) * 100), String(e.desc || '').trim()].join('|');
+    if (seen.has(k)) { const j = seen.get(k); if (e._invId && !exps[j]._invId) { expDrop.add(j); seen.set(k, i); } else expDrop.add(i); }
+    else seen.set(k, i);
+  });
+  const expMoney = [...expDrop].reduce((a, i) => a + (+exps[i].amount || 0), 0);
+  // 2. חשבוניות עמיר שהן בעצם חשבוניות איכותית (אותו מספר בדיוק)
+  const ichInv = new Set(invs.filter(x => ns(x.sup) === 'איכותית').map(x => canonNum(x.num)).filter(Boolean));
+  const invDrop = new Set();
+  invs.forEach((x, i) => { if (ns(x.sup) === 'עמיר' && /^01\/0\d+$/.test(String(x.num || '')) && ichInv.has(canonNum(x.num)) && !(x.docIds || []).length) invDrop.add(i); });
+  // 3. תעודות כפולות
+  const delDrop = new Set(); dels.forEach((d, i) => { if (DUP_DEL_IDS.includes(String(d.id))) delDrop.add(i); });
+  // 4. מזהים כפולים (שתי רשומות שונות עם אותו מספר פנימי)
+  const reid = (arr, drop) => { const c = new Set(); let n = 0; arr.forEach((x, i) => { if (drop.has(i)) return; const k = String(x.id); if (c.has(k)) n++; else c.add(k); }); return n; };
+  return { invs, dels, exps, expDrop, expAmir, expMoney, invDrop, delDrop,
+    reInv: reid(invs, invDrop), reExp: reid(exps, expDrop) };
+}
+function cleanDuplicates() {
+  const P = planDuplicates();
+  const fix = (arr, drop) => { const used = new Set(); return arr.filter((x, i) => !drop.has(i)).map(x => { let k = String(x.id); if (used.has(k)) { x.id = uid(); k = String(x.id); } used.add(k); return x; }); };
+  const total = P.expDrop.size + P.invDrop.size + P.delDrop.size + P.reInv + P.reExp;
+  if (!total) { alert('✅ לא נמצאו כפילויות. הכל נקי.'); return; }
+  const money = Math.round(P.expMoney).toLocaleString('he-IL');
+  if (!confirm(`נמצאו כפילויות:\n\n` +
+    `🧾 הוצאות שנרשמו כמה פעמים: ${P.expDrop.size} עותקים מיותרים יימחקו (₪${money})` + (P.expAmir ? `\n   (מתוכם ${P.expAmir} של איכותית שנרשמו גם על עמיר)` : '') + `\n` +
+    `📄 חשבוניות איכותית שנרשמו גם על עמיר: ${P.invDrop.size} יימחקו מעמיר\n` +
+    `🚚 תעודות משלוח כפולות: ${P.delDrop.size} יימחקו\n` +
+    `🔢 רשומות עם מספר פנימי כפול: ${P.reInv + P.reExp} יקבלו מספר חדש (שום דבר לא נמחק)\n\n` +
+    `לפני הניקוי יורד קובץ גיבוי. להמשיך?`)) return;
+  try { const b = new Blob([JSON.stringify({ li2: P.invs, ld2: P.dels, lex2: P.exps, at: new Date().toISOString() })], { type: 'application/json' }); const a = document.createElement('a'); a.href = URL.createObjectURL(b); a.download = 'backup-before-duplicate-cleanup.json'; a.click(); } catch (e) {}
+  const goneDel = new Set([...P.delDrop].map(i => String(P.dels[i].id)));
+  const invs = fix(P.invs, P.invDrop).map(x => { if ((x.docIds || []).some(d => goneDel.has(String(d)))) x.docIds = x.docIds.filter(d => !goneDel.has(String(d))); return x; });
+  const dels = P.dels.filter((d, i) => !P.delDrop.has(i));
+  const exps = fix(P.exps, P.expDrop);
+  localStorage.setItem('li2', JSON.stringify(invs));
+  localStorage.setItem('ld2', JSON.stringify(dels));
+  localStorage.setItem('lex2', JSON.stringify(exps));
+  renderList(true);
+  alert(`✅ הניקוי הסתיים\n\nהוצאות: ${P.exps.length} ← ${exps.length}\nחשבוניות: ${P.invs.length} ← ${invs.length}\nתעודות: ${P.dels.length} ← ${dels.length}\n\nהשינוי נשמר גם בענן ויופיע במערכת הגדולה.`);
 }
 function autoLinkDrive() {
   const invs = LF('li2');
