@@ -385,6 +385,7 @@ h1 { font-size: 24px; font-weight: 900; color: var(--gold); }
       </select>
     </div>
     <button class="inv-btn add" style="margin-top:8px;width:100%;padding:10px;font-size:14px" onclick="autoLinkDrive()">🔗 קשר אוטומטית לתיקיות בדרייב</button>
+    <label class="inv-btn add" style="margin-top:8px;width:100%;padding:10px;font-size:14px;display:block;text-align:center;box-sizing:border-box;cursor:pointer">📥 ייבוא חשבוניות מהדרייב (קובץ מ-Claude)<input type="file" accept=".json,application/json" style="display:none" onchange="if(this.files[0])importDriveFile(this.files[0]);this.value=''"></label>
     <div id="ls-supbox"></div>
   </div>
   <div id="ls-dupbar"></div>
@@ -846,6 +847,53 @@ function driveMapLink(sup, year) {
   if (y && +y < 2024 && f.y.old) return DRIVE_URL(f.y.old);
   return DRIVE_URL(f.id);
 }
+
+// ---- ייבוא חשבוניות מהדרייב (קובץ שהוכן מראש) ----
+function importDriveFile(file) {
+  const rd = new FileReader();
+  rd.onload = () => {
+    let data;
+    try { data = JSON.parse(rd.result); } catch (e) { alert('הקובץ לא תקין'); return; }
+    const recs = Array.isArray(data) ? data : (data.records || []);
+    if (!recs.length) { alert('אין רשומות בקובץ'); return; }
+    const invs = LF('li2');
+    const same = (x, r) => sameSup(x.sup, r.supplier) && (
+      (r.docNumber && normNum(x.num) && normNum(x.num) === normNum(r.docNumber)) ||
+      (Math.abs(Math.abs(+x.total || 0) - Math.abs(+r.amount || 0)) <= 1 && x.date && r.date && Math.abs(new Date(x.date) - new Date(r.date)) <= 3 * 864e5));
+    let add = 0, link = 0, paid = 0, skip = 0;
+    const stamp = new Date().toISOString();
+    const pending = [], acts = [];
+    recs.filter(r => r.docType !== 'קבלה').forEach(r => {
+      const ex = invs.find(x => same(x, r)) || pending.find(x => same(x, r));
+      if (ex) { link++; acts.push(() => { if (r.driveFile && !ex._driveFile) ex._driveFile = r.driveFile; if (r.driveFolder && !ex._driveFolder) ex._driveFolder = r.driveFolder; }); return; }
+      const [y, m] = String(r.date || '').split('-');
+      const amount = r.docType === 'חשבונית זיכוי' ? -Math.abs(+r.amount || 0) : (+r.amount || 0);
+      const isPaid = r.docType === 'חשבונית מס קבלה' || !!r.paid;
+      pending.push({ id: Date.now() + Math.random(), num: canonNum(r.docNumber || ''), date: r.date || '', sup: r.supplier, month: +m || 0, year: +y || 0,
+        total: amount, docIds: [], directItems: [{ id: Date.now() + Math.random(), desc: `${r.docType} ${r.docNumber || ''} (מהדרייב)`, amount }],
+        direct: true, paid: isPaid, paidDate: isPaid ? (r.paidDate || r.date || '') : '',
+        _fromInvoiceSorter: true, _fromDrive: true, _sortedAt: stamp, _srcFile: r.fileName || '',
+        ...(r.driveFile ? { _driveFile: r.driveFile } : {}), ...(r.driveFolder ? { _driveFolder: r.driveFolder } : {}) });
+      add++;
+    });
+    recs.filter(r => r.docType === 'קבלה').forEach(r => {
+      const pool = invs.concat(pending);
+      const inv = pool.find(x => sameSup(x.sup, r.supplier) && ((r.forInvoice && normNum(x.num) === normNum(r.forInvoice)) || Math.abs((+x.total || 0) - (+r.amount || 0)) <= 1));
+      if (!inv) { skip++; return; }
+      if (inv.paid && inv._receiptFile) { link++; return; }
+      paid++;
+      acts.push(() => { inv.paid = true; inv.paidDate = inv.paidDate || r.date || ''; if (r.docNumber) inv._receiptNum = r.docNumber; if (r.driveFile && !inv._receiptFile) inv._receiptFile = r.driveFile; });
+    });
+    if (!confirm(`בקובץ ${recs.length} מסמכים מהדרייב:\n\n➕ ${add} חשבוניות חדשות יתווספו\n🔗 ${link} כבר קיימות — רק יקושרו לקובץ בדרייב\n✅ ${paid} קבלות — יסמנו חשבונית כשולמה\n⏭️ ${skip} קבלות בלי חשבונית תואמת — ידולגו\n\nלפני הייבוא יורד קובץ גיבוי. להמשיך?`)) return;
+    try { const b = new Blob([JSON.stringify({ li2: invs, at: new Date().toISOString() })], { type: 'application/json' }); const a = document.createElement('a'); a.href = URL.createObjectURL(b); a.download = 'invoices-backup-before-drive-import.json'; a.click(); } catch (e) {}
+    pending.forEach(x => invs.push(x));
+    acts.forEach(f => f());
+    localStorage.setItem('li2', JSON.stringify(invs));
+    renderList(true);
+    alert(`✅ הייבוא הסתיים: נוספו ${add}, קושרו ${link}, סומנו כשולמו ${paid}`);
+  };
+  rd.readAsText(file);
+}
 function autoLinkDrive() {
   const invs = LF('li2');
   let n = 0; const miss = {};
@@ -932,6 +980,7 @@ function renderList(fillSuppliers) {
         <div class="inv-sub">${e(x.date || '')} · מס' ${e(x.num || '')} · <span class="${x.paid ? 'badge-paid' : 'badge-unpaid'}">${x.paid ? 'שולמה' : 'לא שולמה'}</span>${x._fromInvoiceSorter ? ' · 📥' : ''}</div>
       </div>
       <div class="inv-amt">₪${(Number(x.total) || 0).toLocaleString('he-IL', { maximumFractionDigits: 2 })}</div>
+      ${x._driveFile ? `<a class="inv-btn" href="${e(x._driveFile)}" target="_blank" rel="noopener">📄 קובץ</a>` : ''}
       ${x._driveFolder ? `<a class="inv-btn" href="${e(x._driveFolder)}" target="_blank" rel="noopener">📁 דרייב</a><button class="inv-btn add" title="שנה קישור" onclick="setInvoiceFolder(${i})">✏️</button>` : `<button class="inv-btn add" onclick="setInvoiceFolder(${i})">➕ קישור</button>`}
     </div>`).join('');
   document.getElementById('ls-rows').innerHTML = rows || '<div class="folder-guide" style="text-align:center">אין חשבוניות להצגה</div>';
