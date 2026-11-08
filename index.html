@@ -2,6 +2,121 @@
 <html lang="he" dir="rtl">
 <head>
 <meta charset="UTF-8">
+<!-- 🔒 קוד PIN לכל מערכות לוריא — אותו קוד בכל הדפים (נובמבר 2026) -->
+<style id="lf-lock-css">
+html.lf-locked body{display:none!important}
+#lf-lock{position:fixed;inset:0;z-index:2147483647;background:#14201a;color:#f3ead2;display:flex;align-items:center;justify-content:center;font-family:Heebo,Arial,sans-serif;direction:rtl}
+#lf-lock .bx{width:min(340px,88vw);text-align:center}
+#lf-lock h2{margin:0 0 6px;font-size:22px;color:#e2c46b}
+#lf-lock p{margin:0 0 18px;font-size:14px;opacity:.85;line-height:1.5}
+#lf-lock input{width:100%;box-sizing:border-box;font-size:28px;letter-spacing:10px;text-align:center;padding:12px;border-radius:12px;border:1px solid #6b5a2a;background:#0d1611;color:#fff;direction:ltr}
+#lf-lock button{margin-top:12px;width:100%;padding:12px;border-radius:12px;border:1px solid #e2c46b;background:#e2c46b;color:#14201a;font-size:16px;font-weight:700;cursor:pointer}
+#lf-lock button.ln{background:none;color:#cbbf9a;border:none;font-weight:400;font-size:13px;text-decoration:underline;margin-top:16px}
+#lf-lock .er{min-height:20px;margin-top:10px;font-size:14px;color:#ff8a80}
+@media print{#lf-lockbtn,#lf-lock{display:none!important}}
+#lf-lockbtn{position:fixed;bottom:14px;right:14px;z-index:2147483646;width:38px;height:38px;border-radius:50%;border:1px solid rgba(226,196,107,.5);background:rgba(20,32,26,.75);color:#e2c46b;font-size:17px;cursor:pointer;opacity:.7}
+</style>
+<script>
+(function () {
+  var K_PIN = 'luria_pin_v1', K_ACT = 'luria_pin_active', K_FAIL = 'luria_pin_fail';
+  var IDLE = 15 * 60 * 1000;             // ננעל אחרי 15 דקות בלי שימוש
+  var OWNER = 'lurietrogim@gmail.com';
+  var html = document.documentElement, box = null, lastW = 0;
+  function ls(k, v) { try { if (v === undefined) return localStorage.getItem(k); if (v === null) localStorage.removeItem(k); else localStorage.setItem(k, v); } catch (e) { return null; } }
+  function pin() { try { return JSON.parse(ls(K_PIN) || 'null'); } catch (e) { return null; } }
+  function fresh() { return Date.now() - (+ls(K_ACT) || 0) < IDLE; }
+  function touch() { var n = Date.now(); if (n - lastW > 20000 && !html.classList.contains('lf-locked')) { lastW = n; ls(K_ACT, String(n)); } }
+  function b64(buf) { return btoa(String.fromCharCode.apply(null, new Uint8Array(buf))); }
+  function unb64(s) { return Uint8Array.from(atob(s), function (c) { return c.charCodeAt(0); }); }
+  function hashPin(code, salt, it) {
+    var enc = new TextEncoder();
+    return crypto.subtle.importKey('raw', enc.encode(code), 'PBKDF2', false, ['deriveBits']).then(function (k) {
+      return crypto.subtle.deriveBits({ name: 'PBKDF2', hash: 'SHA-256', salt: salt, iterations: it }, k, 256);
+    }).then(b64);
+  }
+  function show(mode) {
+    html.classList.add('lf-locked');
+    if (!box) { box = document.createElement('div'); box.id = 'lf-lock'; html.appendChild(box); }
+    var p = pin();
+    if (mode === 'setup' || !p) {
+      box.innerHTML = '<div class="bx"><h2>🔒 קוד כניסה למערכות לוריא</h2><p>בחר קוד של 4 עד 6 ספרות.<br>הקוד ישמש את כל המערכות במכשיר הזה.</p>' +
+        '<input id="lf-a" type="password" inputmode="numeric" autocomplete="off" maxlength="6" placeholder="קוד חדש">' +
+        '<input id="lf-b" type="password" inputmode="numeric" autocomplete="off" maxlength="6" placeholder="שוב, לאימות" style="margin-top:10px">' +
+        '<button id="lf-ok">שמור קוד</button><div class="er" id="lf-er"></div></div>';
+      var a = box.querySelector('#lf-a'), b2 = box.querySelector('#lf-b');
+      setTimeout(function () { a.focus(); }, 50);
+      box.querySelector('#lf-ok').onclick = function () {
+        var x = a.value.trim(), y = b2.value.trim(), er = box.querySelector('#lf-er');
+        if (!/^\d{4,6}$/.test(x)) { er.textContent = 'הקוד צריך להיות 4 עד 6 ספרות'; return; }
+        if (x !== y) { er.textContent = 'שני הקודים לא זהים'; b2.value = ''; b2.focus(); return; }
+        var salt = crypto.getRandomValues(new Uint8Array(16)), it = 150000;
+        hashPin(x, salt, it).then(function (h) {
+          ls(K_PIN, JSON.stringify({ s: b64(salt), h: h, i: it, l: x.length })); ls(K_FAIL, null); unlock();
+        });
+      };
+      return;
+    }
+    box.innerHTML = '<div class="bx"><h2>🔒 מערכות לוריא</h2><p>הקש את הקוד</p>' +
+      '<input id="lf-in" type="password" inputmode="numeric" autocomplete="off" maxlength="6">' +
+      '<button id="lf-ok">כניסה</button><div class="er" id="lf-er"></div>' +
+      '<button class="ln" id="lf-forgot">שכחתי את הקוד</button></div>';
+    var inp = box.querySelector('#lf-in'), er = box.querySelector('#lf-er');
+    setTimeout(function () { inp.focus(); }, 50);
+    function wait() { var f = {}; try { f = JSON.parse(ls(K_FAIL) || '{}'); } catch (e) {} return Math.max(0, (f.until || 0) - Date.now()); }
+    function check() {
+      var w = wait(); if (w) { er.textContent = 'יותר מדי ניסיונות — נסה שוב בעוד ' + Math.ceil(w / 1000) + ' שניות'; return; }
+      var code = inp.value.trim(); if (!code) return;
+      hashPin(code, unb64(p.s), p.i).then(function (h) {
+        if (h === p.h) { ls(K_FAIL, null); unlock(); return; }
+        var f = {}; try { f = JSON.parse(ls(K_FAIL) || '{}'); } catch (e) {}
+        f.n = (f.n || 0) + 1;
+        if (f.n >= 5) f.until = Date.now() + Math.min(3600000, 30000 * Math.pow(2, f.n - 5));
+        ls(K_FAIL, JSON.stringify(f));
+        inp.value = ''; er.textContent = f.until && f.until > Date.now() ? 'קוד שגוי. ננעל ל-' + Math.ceil((f.until - Date.now()) / 1000) + ' שניות' : 'קוד שגוי';
+      });
+    }
+    box.querySelector('#lf-ok').onclick = check;
+    inp.onkeydown = function (e) { if (e.key === 'Enter') check(); };
+    inp.oninput = function () { if (p.l && inp.value.length === p.l) check(); };
+    box.querySelector('#lf-forgot').onclick = function () { forgot(er); };
+  }
+  function forgot(er) {
+    er.style.color = '#cbbf9a'; er.textContent = 'נפתח חלון של גוגל — התחבר עם ' + OWNER;
+    var base = 'https://www.gstatic.com/firebasejs/12.18.0/';
+    Promise.all([import(base + 'firebase-app.js'), import(base + 'firebase-auth.js')]).then(function (m) {
+      var A = m[0], Au = m[1];
+      var app = A.getApps().length ? A.getApp() : A.initializeApp({ apiKey: 'AIzaSyDeEqKUSOUvlJadmkaJ_E9qx-BifkpnKg4', authDomain: 'luria-farm.firebaseapp.com', projectId: 'luria-farm', appId: '1:977449076829:web:2ef92d7bdb57690066a5b4' });
+      var pr = new Au.GoogleAuthProvider(); pr.setCustomParameters({ prompt: 'select_account', login_hint: OWNER });
+      return Au.signInWithPopup(Au.getAuth(app), pr);
+    }).then(function (r) {
+      if (String(r.user.email || '').toLowerCase() !== OWNER) { er.style.color = ''; er.textContent = 'רק החשבון ' + OWNER + ' יכול לאפס את הקוד'; return; }
+      ls(K_PIN, null); ls(K_FAIL, null); show('setup');
+    }).catch(function (e) { er.style.color = ''; er.textContent = 'האיפוס לא הצליח: ' + (e && (e.code || e.message) || e); });
+  }
+  function unlock() {
+    ls(K_ACT, String(Date.now())); lastW = Date.now();
+    html.classList.remove('lf-locked');
+    if (box) { box.remove(); box = null; }
+  }
+  window.luriaLock = function () { ls(K_ACT, '0'); show(); };
+  window.luriaChangePin = function () { show('setup'); };
+  if (!pin() || !fresh()) show(); else touch();
+  ['pointerdown', 'keydown', 'scroll', 'touchstart'].forEach(function (ev) { addEventListener(ev, touch, { passive: true, capture: true }); });
+  document.addEventListener('visibilitychange', function () { if (document.visibilityState === 'visible' && pin() && !fresh()) show(); });
+  setInterval(function () { if (pin() && !fresh() && !html.classList.contains('lf-locked')) show(); }, 30000);
+  addEventListener('storage', function (e) { if (e.key === K_PIN && !e.newValue) show('setup'); });
+  document.addEventListener('DOMContentLoaded', function () {
+    var b = document.createElement('button'); b.id = 'lf-lockbtn'; b.title = 'נעילה'; b.textContent = '🔒';
+    b.onclick = function () {
+      if (confirm('🔒 לנעול את המערכות עכשיו?')) { window.luriaLock(); return; }
+      if (confirm('לשנות את קוד הכניסה?')) window.luriaChangePin();
+    };
+    document.body.appendChild(b);
+  });
+})();
+</script>
+<!-- /🔒 -->
+
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <title>מיון חשבוניות — לוריא</title>
 <meta name="theme-color" content="#0f2118">
