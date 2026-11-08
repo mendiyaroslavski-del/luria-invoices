@@ -375,7 +375,7 @@ h1 { font-size: 24px; font-weight: 900; color: var(--gold); }
   <div class="folder-guide" style="padding:14px">
     <input class="field-input" id="ls-search" placeholder="🔎 חיפוש לפי ספק או מספר" oninput="renderList()">
     <div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap">
-      <select class="field-select" id="ls-year" style="flex:0 0 110px" onchange="renderList()"></select>
+      <select class="field-select" id="ls-year" style="flex:0 0 110px" onchange="_lsYearTouched=true;renderList()"></select>
       <select class="field-select" id="ls-sup" style="flex:1;min-width:150px" onchange="renderList()"></select>
       <select class="field-select" id="ls-filter" style="flex:1;min-width:150px" onchange="renderList()">
         <option value="">כל החשבוניות</option>
@@ -1035,6 +1035,8 @@ function fixBenski() {
     if (ch) localStorage.setItem('li2', JSON.stringify(invs));
   } catch (e) {}
 }
+// ברירת מחדל: השנה הנוכחית. בחיפוש (טקסט או ספק) — מכל השנים, אלא אם בחרת שנה בעצמך
+let _lsYearTouched = false, _lsYearInit = false;
 function renderList(fillSuppliers) {
   fixBenski(); applyDrivePatches();
   const e = s => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;');
@@ -1051,12 +1053,16 @@ function renderList(fillSuppliers) {
   if (fillSuppliers || !yearSel.options.length) {
     const cur = yearSel.value;
     const years = [...new Set(invs.map(yearOf).filter(Boolean))].sort().reverse();
+    const thisYear = String(new Date().getFullYear());
+    if (!years.includes(thisYear)) years.unshift(thisYear);
     yearSel.innerHTML = `<option value="">כל השנים</option>` + years.map(y => `<option value="${y}">${y}</option>`).join('');
-    yearSel.value = cur;
+    yearSel.value = _lsYearInit ? cur : thisYear;
+    _lsYearInit = true;
   }
-  const year = yearSel.value;
   const q = document.getElementById('ls-search').value.trim();
   const sup = supSel.value;
+  const searching = !!(q || sup) && !_lsYearTouched;
+  const year = searching ? '' : yearSel.value;
   const flt = document.getElementById('ls-filter').value;
   let list = invs.map((x, i) => ({ x, i })).filter(({ x }) =>
     (!sup || x.sup === sup) &&
@@ -1070,7 +1076,7 @@ function renderList(fillSuppliers) {
   const vatSum = list.reduce((t, { x }) => t + vatOf(x), 0);
   const noFolder = list.filter(({ x }) => !x._driveFolder).length;
   const nis = v => '₪' + Math.round(v).toLocaleString('he-IL');
-  document.getElementById('ls-summary').innerHTML = `${year ? year + ': ' : ''}${list.length} חשבוניות${noFolder ? ` · ${noFolder} בלי קישור לדרייב` : ''}
+  document.getElementById('ls-summary').innerHTML = `${searching ? '🔎 תוצאות חיפוש מכל השנים: ' : (year ? year + ': ' : '')}${list.length} חשבוניות${noFolder ? ` · ${noFolder} בלי קישור לדרייב` : ''}
     <div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:8px;font-size:14px">
       <span style="background:rgba(255,255,255,.08);border-radius:8px;padding:6px 10px">כולל מע"מ: <b>${nis(total)}</b></span>
       <span style="background:rgba(255,255,255,.08);border-radius:8px;padding:6px 10px">לפני מע"מ: <b>${nis(total - vatSum)}</b></span>
