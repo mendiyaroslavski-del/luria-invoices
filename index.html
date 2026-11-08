@@ -764,9 +764,10 @@ function renderApprovalCard(r, index) {
   const escA = s => String(s ?? '').replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
 
   const detected = (info.knownSupplier || info.supplier || '').trim();
-  const sups = farmSuppliers().slice(0, 60);
+  const sups = farmSuppliers();
   const supplierOptions = [detected && !sups.includes(detected) ? detected : null, ...sups].filter(Boolean)
-    .map(s => `<option value="${escA(s)}" ${s === detected ? 'selected' : ''}>${escA(s)}${s === detected && !sups.includes(s) ? ' (ספק חדש)' : ''}</option>`).join('');
+    .map(s => `<option value="${escA(s)}" ${s === detected ? 'selected' : ''}>${escA(s)}${s === detected && !sups.includes(s) ? ' (ספק חדש)' : ''}</option>`).join('')
+    + `<option value="__new__">➕ ספק חדש — הקלד שם…</option>`;
   const docTypeOptions = DOC_TYPES.map(t => `<option value="${t}" ${info.docType === t ? 'selected' : ''}>${t}</option>`).join('');
 
   const existing = r.info ? findExisting({ ...info, supplier: detected }, info.docType) : null;
@@ -807,8 +808,8 @@ function renderApprovalCard(r, index) {
     <input type="hidden" id="f-for-${index}" value="${escA(info.forInvoice || '')}">
     <div class="field-group">
       <div class="field-label">📁 קישור לתיקייה בדרייב (לא חובה)</div>
-      <input class="field-input" id="f-drive-${index}" value="${escA(driveFolderFor(detected, (info.date || '').slice(0, 4)))}" placeholder="הדבק כאן קישור לתיקייה של הספק" dir="ltr" oninput="this.dataset.touched=1">
-      <div class="field-label" style="margin-top:4px">${driveFolderFor(detected, (info.date || '').slice(0, 4)) ? 'מולא אוטומטית מהחשבונית הקודמת של הספק' : 'מספיק פעם אחת לכל ספק — בפעם הבאה זה יתמלא לבד'}</div>
+      <input class="field-input" id="f-drive-${index}" value="${escA(driveFolderOrRoot(detected, (info.date || '').slice(0, 4)))}" placeholder="הדבק כאן קישור לתיקייה של הספק" dir="ltr" oninput="this.dataset.touched=1">
+      <div class="field-label" style="margin-top:4px"><span id="f-drive-note-${index}">${driveFolderFor(detected, (info.date || '').slice(0, 4)) ? 'מולא אוטומטית — התיקייה של הספק' : 'אין עדיין תיקייה לספק — מקושר לתיקייה הכללית "חשבוניות". אם יש לו תיקייה משלו, הדבק אותה פעם אחת'}</span></div>
     </div>
     <div class="save-box" style="margin-bottom:12px">
       <div class="save-label">📁 יישמר ב:</div>
@@ -834,14 +835,30 @@ function cleanDriveLink(v) {
 // The folder link used last time for this supplier.
 function driveFolderFor(sup, year) {
   if (!sup) return '';
-  let all = [...LF('li2'), ...LF('ld2')].filter(x => x && x._driveFolder && sameSup(x.sup, sup));
+  let all = [...LF('li2'), ...LF('ld2')].filter(x => x && x._driveFolder && !String(x._driveFolder).includes('1apFhQaHLEZtUQELEfr5zhgaATYooottc') && sameSup(x.sup, sup));
   if (year && all.some(x => yearOf(x) === String(year))) all = all.filter(x => yearOf(x) === String(year));
   all.sort((a, b) => String(b._sortedAt || b.date || '').localeCompare(String(a._sortedAt || a.date || '')));
   return all.length ? all[0]._driveFolder : driveMapLink(sup, year);
 }
+// אם אין עדיין תיקייה לספק — קישור לתיקייה הכללית "חשבוניות" בדרייב
+const DRIVE_ROOT = 'https://drive.google.com/drive/folders/1apFhQaHLEZtUQELEfr5zhgaATYooottc';
+const driveFolderOrRoot = (sup, year) => driveFolderFor(sup, year) || DRIVE_ROOT;
 function onSupChange(i) {
+  const sel = document.getElementById(`f-sup-${i}`);
+  if (sel.value === '__new__') {
+    const name = (prompt('שם הספק החדש:') || '').trim().replace(/\s+/g, ' ');
+    if (!name) { sel.selectedIndex = 0; }
+    else {
+      const ex = [...sel.options].find(o => o.value === name);
+      if (ex) sel.value = name;
+      else { const o = document.createElement('option'); o.value = name; o.textContent = name + ' (ספק חדש)'; sel.insertBefore(o, sel.firstChild); sel.value = name; }
+    }
+  }
   const f = document.getElementById(`f-drive-${i}`);
-  if (f && !f.dataset.touched) f.value = driveFolderFor(document.getElementById(`f-sup-${i}`).value, (document.getElementById(`f-date-${i}`).value || '').slice(0, 4));
+  const sv = document.getElementById(`f-sup-${i}`).value, yv = (document.getElementById(`f-date-${i}`).value || '').slice(0, 4);
+  if (f && !f.dataset.touched) f.value = driveFolderOrRoot(sv, yv);
+  const nt = document.getElementById(`f-drive-note-${i}`);
+  if (nt) nt.textContent = driveFolderFor(sv, yv) ? 'מולא אוטומטית — התיקייה של הספק' : 'אין עדיין תיקייה לספק — מקושר לתיקייה הכללית "חשבוניות". אם יש לו תיקייה משלו, הדבק אותה פעם אחת';
 }
 
 const yearOf = x => String((x && (x.date || '').slice(0, 4)) || (x && x.year) || '');
