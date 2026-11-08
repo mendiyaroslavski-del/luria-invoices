@@ -350,6 +350,7 @@ h1 { font-size: 24px; font-weight: 900; color: var(--gold); }
   </div>
   <div id="keyStatus" style="margin-top:8px;font-size:12px;"></div>
 </div>
+<div id="drive-bar" style="margin:0 0 12px;padding:10px 12px;border-radius:10px;background:rgba(255,255,255,.06);font-size:14px;display:flex;align-items:center;gap:8px;flex-wrap:wrap"></div>
 <div class="drop-zone" id="dropZone">
   <input type="file" id="fileInput" accept="application/pdf" multiple>
   <div class="drop-icon">📄</div>
@@ -704,11 +705,11 @@ function syncToLuriaFarm(info, docType, srcFile) {
       const n = normNum(info.forInvoice);
       const inv = n && invs.find(x => normNum(x.num) === n && sameSup(x.sup, sup));
       if (!inv) return { status: 'noInvoice' };
-      if (inv.paid){ if (info.driveFolder && !inv._driveFolder){ inv._driveFolder = info.driveFolder; saveF('li2', invs); } return { status: 'alreadyPaid', rec: inv }; }
+      if (inv.paid){ if (info.driveFolder && !inv._driveFolder){ inv._driveFolder = info.driveFolder; saveF('li2', invs); } return { status: 'alreadyPaid', rec: inv, key: 'li2' }; }
       inv.paid = true; inv.paidDate = date; inv._receiptNum = num;
       if (info.driveFolder && !inv._driveFolder) inv._driveFolder = info.driveFolder;
       saveF('li2', invs);
-      return { status: 'paid', rec: inv };
+      return { status: 'paid', rec: inv, key: 'li2' };
     }
 
     if (INVOICE_TYPES.includes(docType)) {
@@ -716,7 +717,7 @@ function syncToLuriaFarm(info, docType, srcFile) {
       const invs = LF('li2');
       const amount = docType === 'חשבונית זיכוי' ? -Math.abs(total) : total;
       const paidNow = docType === 'חשבונית מס קבלה';
-      invs.push({
+      const rec = {
         id: Date.now(),
         num, date, sup, month, year,
         total: amount,
@@ -727,9 +728,10 @@ function syncToLuriaFarm(info, docType, srcFile) {
         paidDate: paidNow ? date : '',
         _fromInvoiceSorter: true, _srcFile: srcFile || '', _sortedAt: stamp,
         ...(info.driveFolder ? { _driveFolder: info.driveFolder } : {})
-      });
+      };
+      invs.push(rec);
       saveF('li2', invs);
-      return { status: 'added' };
+      return { status: 'added', rec, key: 'li2' };
     }
 
     if (docType === 'תעודת משלוח') {
@@ -737,16 +739,17 @@ function syncToLuriaFarm(info, docType, srcFile) {
       const dels = LF('ld2');
       const rate = vatRateFor(date);
       const net = r2(total / (1 + rate));
-      dels.push({
+      const rec = {
         id: Date.now() + Math.random(),
         sup, doc: num, date, year: y || '',
         items: [{ id: 's' + Date.now(), product: 'תעודה ממיון חשבוניות — לפרט', qty: 1, price: net, discount: 0, total: net, vat: r2(total - net), totalV: total, cat: '' }],
         invNum: '', ts: Date.now(),
         _fromInvoiceSorter: true, _srcFile: srcFile || '', _sortedAt: stamp,
         ...(info.driveFolder ? { _driveFolder: info.driveFolder } : {})
-      });
+      };
+      dels.push(rec);
       saveF('ld2', dels);
-      return { status: 'added' };
+      return { status: 'added', rec, key: 'ld2' };
     }
 
     return { status: 'notSaved' };
@@ -816,7 +819,7 @@ function renderApprovalCard(r, index) {
       <div class="save-path" id="f-path-${index}">חשבוניות/${escA(detected || '?')}</div>
       <div class="save-filename">${escA(r.fileName)}</div>
     </div>
-    <button class="btn-approve" onclick="approveAndSync(${index})">${existing ? '⬇️ כבר קיים — הורד את הקובץ בלבד' : '✅ אשר — שמור במערכת ובתיקייה'}</button>
+    <button class="btn-approve" onclick="approveAndSync(${index})">${existing ? (driveOn() ? '☁️ כבר קיים — שמור את הקובץ בדרייב בלבד' : '⬇️ כבר קיים — הורד את הקובץ בלבד') : (driveOn() ? '✅ אשר — שמור במערכת ובדרייב' : '✅ אשר — שמור במערכת ובתיקייה')}</button>
     ${existing ? '' : `<button class="btn-download-only" style="border-color:var(--light);color:var(--light)" onclick="approveAndSync(${index}, true)">💾 שמור במערכת בלבד (הקובץ כבר שמור אצלי)</button>`}
     <button class="btn-download-only" onclick="downloadOnly(${index})">⬇️ הורד בלבד (ללא שמירה במערכת)</button>
     <div id="sync-result-${index}"></div>`;
@@ -1315,7 +1318,121 @@ function setSupplierFolder() {
   renderList();
 }
 
-function approveAndSync(index, noDownload) {
+// ---- העלאה ישירה לדרייב ----
+const DRIVE_ROOT_ID = '1apFhQaHLEZtUQELEfr5zhgaATYooottc';
+let _dtok = null, _dexp = 0;
+try { const t = JSON.parse(sessionStorage.getItem('drive_tok') || 'null'); if (t && t.exp > Date.now() + 60000) { _dtok = t.tok; _dexp = t.exp; } } catch (e) {}
+const driveOn = () => localStorage.getItem('drive_upload_on') === '1';
+const driveTokOk = () => !!_dtok && _dexp > Date.now() + 60000;
+async function driveConnect() {
+  if (typeof window.lfDriveToken !== 'function') throw new Error('המערכת עוד נטענת — נסה שוב בעוד רגע');
+  const tok = await window.lfDriveToken();
+  _dtok = tok; _dexp = Date.now() + 55 * 60000;
+  try { sessionStorage.setItem('drive_tok', JSON.stringify({ tok, exp: _dexp })); } catch (e) {}
+}
+function driveErr(e) {
+  const m = String(e && (e.code || e.message) || e);
+  if (/accessNotConfigured|has not been used|is disabled|SERVICE_DISABLED/i.test(m)) return 'צריך להפעיל את Google Drive API — ראה הוראות';
+  if (/popup-blocked/.test(m)) return 'החלון של גוגל נחסם — לחץ שוב';
+  if (/popup-closed|cancelled-popup|user-cancelled/.test(m)) return 'חלון ההתחברות נסגר';
+  if (/insufficient|PERMISSION|403/i.test(m)) return 'אין הרשאה לדרייב — התחבר שוב וסמן את ההרשאה לדרייב';
+  if (m === 'AUTH') return 'ההרשאה פגה — לחץ שוב';
+  return m.slice(0, 120);
+}
+async function dapi(path, opt = {}) {
+  const r = await fetch('https://www.googleapis.com/' + path, { ...opt, headers: { Authorization: 'Bearer ' + _dtok, ...(opt.headers || {}) } });
+  if (r.status === 401) { _dtok = null; try { sessionStorage.removeItem('drive_tok'); } catch (e) {} throw new Error('AUTH'); }
+  if (!r.ok) throw new Error('Drive ' + r.status + ' ' + (await r.text()).slice(0, 300));
+  return r.json();
+}
+const _qe = s => String(s).replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+async function dFind(parent, name, folder) {
+  const q = `'${parent}' in parents and name='${_qe(name)}' and trashed=false` + (folder ? " and mimeType='application/vnd.google-apps.folder'" : '');
+  const j = await dapi('drive/v3/files?pageSize=5&fields=files(id,name,webViewLink)&supportsAllDrives=true&includeItemsFromAllDrives=true&q=' + encodeURIComponent(q));
+  return (j.files || [])[0] || null;
+}
+async function dFolder(parent, name) {
+  const f = await dFind(parent, name, true); if (f) return f.id;
+  const j = await dapi('drive/v3/files?fields=id&supportsAllDrives=true', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name, mimeType: 'application/vnd.google-apps.folder', parents: [parent] }) });
+  return j.id;
+}
+// התיקייה שאליה יעלה הקובץ: חשבוניות / ספק / שנה (נוצרות אם חסרות)
+async function driveTargetFolder(sup, year, fieldLink) {
+  const y = /^\d{4}$/.test(year) ? year : String(new Date().getFullYear());
+  const m = driveMapFolder(sup);
+  const fid = (String(fieldLink || '').match(/folders\/([\w-]+)/) || [])[1];
+  if (fid && fid !== DRIVE_ROOT_ID) {
+    if (m && fid === m.id) return (m.y && m.y[y]) || dFolder(m.id, y);
+    const meta = await dapi(`drive/v3/files/${fid}?fields=id,name,parents&supportsAllDrives=true`);
+    if (/^\d{4}$/.test(meta.name)) return meta.name === y ? fid : dFolder((meta.parents || [])[0], y); // תיקיית שנה אחרת — עוברים לשנה הנכונה
+    return dFolder(fid, y);                                                                                // תיקיית ספק — לתוך תיקיית השנה
+  }
+  if (m && m.y && m.y[y]) return m.y[y];
+  const supId = (m && m.id) || await dFolder(DRIVE_ROOT_ID, String(sup || 'ספק לא ידוע').trim());
+  return dFolder(supId, y);
+}
+async function driveUpload(file, name, folderId) {
+  const ex = await dFind(folderId, name, false);
+  if (ex) return { id: ex.id, link: ex.webViewLink || `https://drive.google.com/file/d/${ex.id}/view`, existed: true };
+  const fd = new FormData();
+  fd.append('metadata', new Blob([JSON.stringify({ name, parents: [folderId] })], { type: 'application/json' }));
+  fd.append('file', file);
+  const j = await dapi('upload/drive/v3/files?uploadType=multipart&fields=id,webViewLink&supportsAllDrives=true', { method: 'POST', body: fd });
+  return { id: j.id, link: j.webViewLink || `https://drive.google.com/file/d/${j.id}/view` };
+}
+function dlFile(file, name) {
+  const url = URL.createObjectURL(file);
+  const a = document.createElement('a'); a.href = url; a.download = name; a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1500);
+}
+async function sendToDrive(file, name, info, res, box) {
+  const line = document.createElement('div'); line.className = 'sync-success'; line.textContent = '⏳ מעלה לדרייב…'; box.appendChild(line);
+  try {
+    if (!driveTokOk()) await driveConnect();
+    const folderId = await driveTargetFolder(info.supplier, String(info.date || '').slice(0, 4), info.driveFolder);
+    const up = await driveUpload(file, name, folderId);
+    const folderUrl = DRIVE_URL(folderId);
+    if (res && res.rec && res.key) {
+      const arr = LF(res.key); const x = arr.find(z => String(z.id) === String(res.rec.id));
+      if (x) {
+        if (res.status === 'paid' || res.status === 'alreadyPaid') x._receiptFile = up.link; else x._driveFile = up.link;
+        if (!x._driveFolder || String(x._driveFolder).includes(DRIVE_ROOT_ID)) x._driveFolder = folderUrl;
+        localStorage.setItem(res.key, JSON.stringify(arr));
+      }
+    }
+    line.innerHTML = `☁️ ${up.existed ? 'הקובץ כבר היה בדרייב' : 'הקובץ הועלה לדרייב'} · <a href="${up.link}" target="_blank" style="color:inherit">פתח קובץ</a> · <a href="${folderUrl}" target="_blank" style="color:inherit">פתח תיקייה</a>`;
+    return true;
+  } catch (e) {
+    console.error('drive upload', e);
+    dlFile(file, name);
+    line.style.color = 'var(--gold)';
+    line.textContent = '⚠️ ההעלאה לדרייב לא הצליחה (' + driveErr(e) + ') — הקובץ ירד לטלפון במקום';
+    return false;
+  }
+}
+function renderDriveBar() {
+  const b = document.getElementById('drive-bar'); if (!b) return;
+  b.innerHTML = driveOn()
+    ? `<span>☁️ <b>שמירה בדרייב: פעילה</b> — קובץ שתאשר יעלה לתיקיית הספק והשנה</span>
+       <button class="inv-btn" onclick="localStorage.removeItem('drive_upload_on');renderDriveBar()">כבה</button>`
+    : `<span>☁️ שמירה בדרייב: כבויה — קבצים יורדים לטלפון</span>
+       <button class="inv-btn add" onclick="driveTurnOn()">🔑 חבר לדרייב</button>`;
+}
+async function driveTurnOn() {
+  try {
+    await driveConnect();
+    await dapi(`drive/v3/files/${DRIVE_ROOT_ID}?fields=id,name&supportsAllDrives=true`);
+    localStorage.setItem('drive_upload_on', '1'); renderDriveBar();
+    alert('✅ הדרייב מחובר.\nמעכשיו כל קובץ שתאשר יעלה לבד לתיקייה חשבוניות/ספק/שנה, והקישור יישמר בחשבונית.');
+  } catch (e) {
+    console.error(e);
+    const m = driveErr(e);
+    alert('❌ החיבור לדרייב לא הצליח: ' + m + (/Google Drive API/.test(m) ? '\n\nצריך להפעיל פעם אחת את Google Drive API בפרויקט luria-farm (שלחתי הוראות בצ\'אט).' : ''));
+  }
+}
+
+async function approveAndSync(index, noDownload) {
   const r = _results[index];
   const sup = document.getElementById(`f-sup-${index}`).value;
   const docType = document.getElementById(`f-type-${index}`).value;
@@ -1332,19 +1449,13 @@ function approveAndSync(index, noDownload) {
 
   const finalInfo = { ...(r.info || {}), supplier: sup, knownSupplier: farmSuppliers().includes(sup) ? sup : null, docType, docNumber: num, date, amount, forInvoice, driveFolder };
   const fileName = buildFileName(finalInfo);
-
-  if (!noDownload) {
-    const url = URL.createObjectURL(r.file);
-    const a = document.createElement('a');
-    a.href = url; a.download = fileName; a.click();
-    setTimeout(() => URL.revokeObjectURL(url), 1500);
-  }
+  const toDrive = !noDownload && driveOn();
 
   const res = syncToLuriaFarm(finalInfo, docType, r.file.name);
   const ok = t => `<div class="sync-success">${t}</div>`;
   const warn = t => `<div class="sync-success" style="color:var(--gold)">${t}</div>`;
   resultDiv.innerHTML = ({
-    added: ok(noDownload ? '✅ נשמר במערכת' : `✅ נשמר במערכת ונורד לתיקייה חשבוניות/${sup}`),
+    added: ok(noDownload || toDrive ? '✅ נשמר במערכת' : `✅ נשמר במערכת ונורד לתיקייה חשבוניות/${sup}`),
     paid: ok(`✅ חשבונית ${res.rec && res.rec.num} סומנה כשולמה (${date})`),
     alreadyPaid: warn('ℹ️ החשבונית כבר מסומנת כשולמה'),
     noInvoice: warn('ℹ️ החשבונית של הקבלה לא נמצאה במערכת'),
@@ -1354,6 +1465,10 @@ function approveAndSync(index, noDownload) {
   })[res.status];
 
   document.getElementById(`card-${index}`).querySelectorAll('button').forEach(b => b.disabled = true);
+  if (!noDownload && res.status !== 'error') {
+    if (toDrive) await sendToDrive(r.file, fileName, finalInfo, res, resultDiv);
+    else dlFile(r.file, fileName);
+  }
 }
 
 function downloadOnly(index) {
@@ -1364,6 +1479,7 @@ function downloadOnly(index) {
   URL.revokeObjectURL(url);
 }
 
+try { setTimeout(renderDriveBar, 0); } catch (e) {}
 function renderResults(results) {
   _results = results;
   resultsTitle.textContent = `${results.length} מסמך${results.length > 1 ? 'ים' : ''} — בדוק ואשר`;
@@ -1607,6 +1723,19 @@ function pushLocal(){
 let pushTimer = null;
 function schedulePush(){ clearTimeout(pushTimer); pushTimer = setTimeout(pushLocal, 400); }
 window.cloudPush = schedulePush;
+// הרשאה לדרייב (נפתח חלון של גוגל; בתוקף כשעה)
+window.lfDriveToken = async function(){
+  await ensureFb();
+  const p = new F.GoogleAuthProvider();
+  p.addScope('https://www.googleapis.com/auth/drive');
+  p.setCustomParameters({ login_hint: OWNER });
+  const cur = auth.currentUser;
+  const res = (cur && isOwner(cur)) ? await F.reauthenticateWithPopup(cur, p) : await F.signInWithPopup(auth, p);
+  if(!isOwner(res.user)) throw new Error('צריך להתחבר עם ' + OWNER);
+  const cred = F.GoogleAuthProvider.credentialFromResult(res);
+  if(!cred || !cred.accessToken) throw new Error('לא התקבלה הרשאה לדרייב');
+  return cred.accessToken;
+};
 Storage.prototype.setItem = function(k, v){ _set.call(this, k, v); if(this === localStorage && SYNC.has(k)) schedulePush(); };
 Storage.prototype.removeItem = function(k){ _rem.call(this, k); if(this === localStorage && SYNC.has(k)) schedulePush(); };
 document.addEventListener('visibilitychange', () => { if(document.visibilityState === 'hidden'){ clearTimeout(pushTimer); pushLocal(); } });
