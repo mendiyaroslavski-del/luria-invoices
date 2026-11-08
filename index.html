@@ -668,6 +668,15 @@ function findInvoiceForReceipt(info) {
 }
 
 const vatRateFor = date => (String(date || '').slice(0, 4) >= '2025' ? 0.18 : 0.17);
+// ספקים שלא גובים מע"מ (שילוח בינלאומי 0%, עוסק פטור) — אפשר לשנות לכל ספק מהרשימה
+const NOVAT_DEFAULT = ['ב.ס.ד שילוח', 'מרכז חב"ד להפצת בשורת הגאולה'];
+const isNoVat = x => x.noVat === true || (x.noVat === undefined && NOVAT_DEFAULT.includes(String(x.sup || '').trim()));
+const vatOf = x => {
+  if (x.vat !== undefined && x.vat !== null && x.vat !== '' && isFinite(+x.vat)) return +x.vat;
+  if (isNoVat(x)) return 0;
+  const t = Number(x.total) || 0;
+  return Math.round((t - t / (1 + vatRateFor(x.date))) * 100) / 100;
+};
 const r2 = x => Math.round(x * 100) / 100;
 
 // ---- Write into the big system, in exactly its own format ----
@@ -860,7 +869,7 @@ function importDriveFile(file) {
     const recs = Array.isArray(data) ? data : (data.records || []);
     if (!recs.length) { alert('אין רשומות בקובץ'); return; }
     const invs = LF('li2');
-    const same = (x, r) => sameSup(x.sup, r.supplier) && (
+    const same = (x, r) => (r.driveFile && x._driveFile === r.driveFile) || sameSup(x.sup, r.supplier) && (
       (r.docNumber && normNum(x.num) && normNum(x.num) === normNum(r.docNumber)) ||
       (Math.abs(Math.abs(+x.total || 0) - Math.abs(+r.amount || 0)) <= 1 && x.date && r.date && Math.abs(new Date(x.date) - new Date(r.date)) <= 3 * 864e5));
     let add = 0, link = 0, paid = 0, skip = 0;
@@ -876,6 +885,8 @@ function importDriveFile(file) {
         total: amount, docIds: [], directItems: [{ id: uid(), desc: `${r.docType} ${r.docNumber || ''} (מהדרייב)`, amount }],
         direct: true, paid: isPaid, paidDate: isPaid ? (r.paidDate || r.date || '') : '',
         _fromInvoiceSorter: true, _fromDrive: true, _sortedAt: stamp, _srcFile: r.fileName || '',
+        ...(r.vat !== undefined && r.vat !== null ? { vat: +r.vat } : {}),
+        ...(r.noVat || invs.some(o => o.sup === r.supplier && o.noVat === true) ? { noVat: true } : {}),
         ...(r.driveFile ? { _driveFile: r.driveFile } : {}), ...(r.driveFolder ? { _driveFolder: r.driveFolder } : {}) });
       add++;
     });
@@ -983,7 +994,49 @@ window.addEventListener('luria-data-changed', _refreshListIfOpen);
 document.addEventListener('visibilitychange', () => { if (!document.hidden) _refreshListIfOpen(); });
 
 // ---- Invoices list ----
+function toggleSupplierVat() {
+  const sup = document.getElementById('ls-sup').value; if (!sup) return;
+  const invs = LF('li2');
+  const nowNo = !invs.some(x => x.sup === sup && isNoVat(x));
+  const n = invs.filter(x => x.sup === sup).length;
+  if (!confirm(nowNo ? `לסמן את ${sup} כספק שלא גובה מע"מ?\n(${n} חשבוניות — כל הסכום שלהן ייחשב "לפני מע"מ")` : `לסמן את ${sup} כספק שגובה מע"מ?`)) return;
+  invs.forEach(x => { if (x.sup === sup) x.noVat = nowNo; });
+  localStorage.setItem('li2', JSON.stringify(invs)); renderList();
+}
+// תיקון חד-פעמי: שתי חשבוניות של יהודה בנצקי נכנסו מהדרייב לפני מע"מ
+// תיקונים מדויקים לחשבוניות ב.ס.ד שילוח מהדרייב: סכום המע"מ המדויק מכל חשבונית
+// (רוב השורות 0% — שילוח לחו"ל; אחסנה/רשימון/איסוף בארץ 17%-18%), 4 סכומים שנקלטו לא נכון,
+// וקובץ מרוכז של 4 חשבוניות שכבר קיימות בנפרד
+const DRIVE_PATCH = {"1nBQIMAgHy_B28HHFzJoodREIQXVFF6kT":{"vat":355.3},"1UgzVwHzpOblI7SSn3eEldSf95mAP_ddO":{"vat":262.82},"1-ZUw3RdY08NdDVyndc_OC9Vz7ht_3OOt":{"vat":157.25},"1L_gStG2CanQd6_9CHjHDjGXTJcLtMAKx":{"vat":63.92},"14XtHAJzS7CQCCI3wXs1rv8bfMRrJ928o":{"total":12416,"vat":265.89},"1zjnlnm3FCKwrCFJlVHWpG-H0rSNMciyG":{"vat":0.0},"10dk_0pr-bSn7MoNpIXBWwKDNfZBoN1Le":{"vat":180.03},"1elzIKGd-9yjQWmvX7KB_xnbPBqB_iKSy":{"vat":223.76},"19daOJ0dREtdDXIRCCmRoP006vrVESEsg":{"vat":66.98},"1HRTt9wgYs5qnB_kncAq2YgVjKRXn88a3":{"vat":353.09},"170E2T-G1Rb8teSYdUIzCaEFGHecKaqIW":{"vat":0.0},"1ak0JtKUKnO05Yl2hSd93lXyMg6GDY4NG":{"vat":246.13},"1Z_i544o01OC8JgR5YWbTi233vOt4vrii":{"vat":0.0},"1H7ROyc5qu690-hd4-rphU6QOKlsMC-YN":{"vat":44.63},"1bAr_EPThYwJeW28tlXPycEiyeC4zTwm4":{"vat":86.87},"1VezRSxQ5MT2bxhhASV6e3vNdvkN0JnCB":{"vat":562.53},"1MdwF8_cbK9QT7qs4aIIm2siKd1qAs5To":{"vat":39.78},"1Or3Tz0zEttkj-55qGDCy29ywFq9dR19Q":{"vat":105.57},"1UioM7yivdq0FgzE9loE8vHosKiEQf13s":{"vat":76.33},"1YpRrSRl5ZVZqk37wYZ-s55wejtoJMUcj":{"vat":249.66},"1anKK3-aZ_xS8BDjs1DkJBjgCYqCVaJ7C":{"vat":41.99},"1mnTlhrfm6pXG4tVcqrmmpEBH6Jvy68-q":{"vat":262.13},"1dh0ls5SdlKDBxLrxsCHqnitQgbFoyXek":{"vat":352.92},"1qp49jWNAeWOK7M4N8xTsLt0XGiCYghLw":{"vat":41.99},"1Ld6VY5JsDqiZikgU4Dssc0iz8K1oEQJp":{"remove":1},"15dnwaCIM9K8R_WUFTmWjGdIY9xwLEu8n":{"total":35505,"vat":549.61},"10wn7SLDolPrXtoaAhURrpUuvwn24-0jp":{"vat":70.55},"17D3PnJkehAe78ufDZ7ENaH-FcUWWVMy-":{"vat":0.0},"12MQkhdJlv2Jsm2Se8pcZ6zLdRHETxhzs":{"total":14895,"vat":266.3},"14EDXu6PhR1sxtCMWx9uEdKyWZ0fKi3rh":{"vat":41.99},"157BN5OIwo1uhEjW3h2dKmDLw7xBJjFaU":{"vat":317.58},"1se5mv5F-oWPUTdGCSqi9_xIAqW3VU0Uo":{"vat":191.04},"1pkJO6bOHm4bmaRNuvnUnhe8pd5ZOqttD":{"vat":729.9},"1rkvWf3U1mauLfGSr497H0B68zs7yVlGr":{"vat":440.82},"1m1-H57oqhlmjqkt0ItK_8_HWzz58oRXO":{"vat":0.0},"13m7FLqA1wzbx8qfhC4p7LPwkyhp5aoqj":{"vat":556.63},"1mPHjuD0qMz0MOiEjjPdPv9OWz-nLC-hM":{"vat":90.72},"18Kr6xB05a1CQeSDgCJS5eRsevK-nIBMD":{"vat":37.44},"1E2sS4-DwehwBvj8JtII3n3KOk4I9E-Kt":{"vat":42.66},"1FcPmL5nT20wlDWrCA_hjbnU7FhQuutPb":{"vat":42.66},"1jE1SnNpTJtUHMA8J343Dzbu3E5SjlwO_":{"vat":52.74},"1mpbovlnu0aS-IGlfheVjrd1BJL2esilU":{"total":12264,"vat":255.91},"1KLIB2q5GHR3I8LAmFKAE8V2T7vmzrDcA":{"vat":749.13},"1MiTITcVwqjf1f9h70zZaGzLH6v1-M9bT":{"vat":133.74},"1jhQ1hm0xfueczWbju1k2VRLpddmKDYes":{"vat":304.02},"1SPR5iAHytYUgclYNA4q9MV6_mN2MFvqP":{"vat":47.16},"1EQxyIQGBCdCKQGdswvFMHxrj5egPd0wx":{"vat":428.22},"1XfUluJ45563NN2ugZ5PiluDaiJbonj3f":{"vat":48.24},"1PShjW4eY__VBDWMuahpqFp_gnFdM_AYU":{"vat":51.84}};
+function applyDrivePatches() {
+  try {
+    const invs = LF('li2'); let ch = false;
+    const idOf = u => (String(u || '').match(/\/d\/([^/?]+)/) || [])[1];
+    const out = invs.filter(x => {
+      const p = x._fromDrive && DRIVE_PATCH[idOf(x._driveFile)];
+      if (!p) return true;
+      if (p.remove) { ch = true; return false; }
+      if (p.total !== undefined && +x.total !== p.total) { x.total = p.total; if (x.directItems && x.directItems[0]) x.directItems[0].amount = p.total; ch = true; }
+      if (p.vat !== undefined && x.vat !== p.vat) { x.vat = p.vat; ch = true; }
+      return true;
+    });
+    if (ch) localStorage.setItem('li2', JSON.stringify(out));
+  } catch (e) {}
+}
+function fixBenski() {
+  try {
+    const invs = LF('li2'); let ch = 0;
+    invs.forEach(x => {
+      if (String(x.sup || '').includes('בנצקי') && x._fromDrive) {
+        const fix = { '2651.01': 3102, '2654.01': 3105 }[(+x.total).toFixed(2)];
+        if (fix) { x.total = fix; if (x.directItems && x.directItems[0]) x.directItems[0].amount = fix; ch++; }
+      }
+    });
+    if (ch) localStorage.setItem('li2', JSON.stringify(invs));
+  } catch (e) {}
+}
 function renderList(fillSuppliers) {
+  fixBenski(); applyDrivePatches();
   const e = s => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;');
   const invs = LF('li2');
   const supSel = document.getElementById('ls-sup');
@@ -1014,8 +1067,15 @@ function renderList(fillSuppliers) {
     (flt !== 'sorter' || x._fromInvoiceSorter));
   list.sort((a, b) => String(b.x.date || '').localeCompare(String(a.x.date || '')));
   const total = list.reduce((t, { x }) => t + (Number(x.total) || 0), 0);
+  const vatSum = list.reduce((t, { x }) => t + vatOf(x), 0);
   const noFolder = list.filter(({ x }) => !x._driveFolder).length;
-  document.getElementById('ls-summary').textContent = `${year ? year + ': ' : ''}${list.length} חשבוניות · ₪${total.toLocaleString('he-IL', { maximumFractionDigits: 2 })}${noFolder ? ` · ${noFolder} בלי קישור לדרייב` : ''}`;
+  const nis = v => '₪' + Math.round(v).toLocaleString('he-IL');
+  document.getElementById('ls-summary').innerHTML = `${year ? year + ': ' : ''}${list.length} חשבוניות${noFolder ? ` · ${noFolder} בלי קישור לדרייב` : ''}
+    <div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:8px;font-size:14px">
+      <span style="background:rgba(255,255,255,.08);border-radius:8px;padding:6px 10px">כולל מע"מ: <b>${nis(total)}</b></span>
+      <span style="background:rgba(255,255,255,.08);border-radius:8px;padding:6px 10px">לפני מע"מ: <b>${nis(total - vatSum)}</b></span>
+      <span style="background:rgba(120,200,120,.15);border-radius:8px;padding:6px 10px">מע"מ (חוזר לעסק): <b>${nis(vatSum)}</b></span>
+    </div>`;
 
   // one-tap link for a whole supplier
   const box = document.getElementById('ls-supbox');
@@ -1024,7 +1084,10 @@ function renderList(fillSuppliers) {
     const link = driveFolderFor(sup, year);
     box.innerHTML = `<div style="margin-top:10px;font-size:13px;color:rgba(255,255,255,.75)">
       ${link ? `📁 תיקיית הספק: <a class="inv-btn" href="${e(link)}" target="_blank" rel="noopener">פתח בדרייב</a>` : '📁 לספק הזה עדיין אין תיקייה'}
-      <button class="inv-btn add" style="margin-right:6px" onclick="setSupplierFolder()">${link ? '✏️ שנה' : '➕ הוסף'} קישור${year ? ' ל-' + year : ''}${missing ? ` (יוחל על ${missing} חשבוניות בלי קישור)` : ''}</button></div>`;
+      <button class="inv-btn add" style="margin-right:6px" onclick="setSupplierFolder()">${link ? '✏️ שנה' : '➕ הוסף'} קישור${year ? ' ל-' + year : ''}${missing ? ` (יוחל על ${missing} חשבוניות בלי קישור)` : ''}</button>
+      ${invs.some(x => x.sup === sup && x.vat !== undefined && x.vat !== null && x.vat !== '') ? `<div style="margin-top:8px">🧾 סכום המע"מ המדויק נקלט מתוך ${invs.filter(x => x.sup === sup && x.vat !== undefined && x.vat !== null && x.vat !== '').length} חשבוניות של הספק</div>` : ''}
+      <div style="margin-top:8px">🧾 מע"מ אצל הספק (לחשבוניות בלי פירוט): <b>${invs.some(x => x.sup === sup && isNoVat(x)) ? 'לא גובה מע"מ' : 'גובה מע"מ'}</b>
+      <button class="inv-btn add" style="margin-right:6px" onclick="toggleSupplierVat()">${invs.some(x => x.sup === sup && isNoVat(x)) ? 'שנה ל: גובה מע"מ' : 'שנה ל: לא גובה מע"מ'}</button></div></div>`;
   } else box.innerHTML = '';
 
   if (renderDupBar()) { renderDups(); return; }
@@ -1032,7 +1095,7 @@ function renderList(fillSuppliers) {
     <div class="inv-row">
       <div class="inv-main">
         <div class="inv-sup">${e(x.sup || '—')}</div>
-        <div class="inv-sub">${e(x.date || '')} · מס' ${e(x.num || '')} · <span class="${x.paid ? 'badge-paid' : 'badge-unpaid'}">${x.paid ? 'שולמה' : 'לא שולמה'}</span>${x._fromInvoiceSorter ? ' · 📥' : ''}</div>
+        <div class="inv-sub">${e(x.date || '')} · מס' ${e(x.num || '')} · <span class="${x.paid ? 'badge-paid' : 'badge-unpaid'}">${x.paid ? 'שולמה' : 'לא שולמה'}</span>${x._fromInvoiceSorter ? ' · 📥' : ''}${vatOf(x) === 0 && Number(x.total) ? ' · ללא מע"מ' : (x.vat !== undefined && x.vat !== null && x.vat !== '' ? ` · מע"מ ₪${(+x.vat).toLocaleString('he-IL')}` : '')}</div>
       </div>
       <div class="inv-amt">₪${(Number(x.total) || 0).toLocaleString('he-IL', { maximumFractionDigits: 2 })}</div>
       ${x._driveFile ? `<a class="inv-btn" href="${e(x._driveFile)}" target="_blank" rel="noopener">📄 קובץ</a>` : ''}
