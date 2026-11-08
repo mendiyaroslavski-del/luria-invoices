@@ -384,6 +384,13 @@ h1 { font-size: 24px; font-weight: 900; color: var(--gold); }
         <option value="sorter">רק שנקלטו כאן</option>
       </select>
     </div>
+    <div style="display:flex;gap:8px;margin-top:8px;align-items:center;flex-wrap:wrap;font-size:14px">
+      <span>📅 מחודש</span>
+      <input type="month" class="field-input" id="ls-from" style="flex:1;min-width:120px;margin:0" onchange="renderList()">
+      <span>עד</span>
+      <input type="month" class="field-input" id="ls-to" style="flex:1;min-width:120px;margin:0" onchange="renderList()">
+      <button class="inv-btn" id="ls-range-clear" style="display:none" onclick="document.getElementById('ls-from').value='';document.getElementById('ls-to').value='';renderList()">✕ נקה</button>
+    </div>
     <button class="inv-btn add" style="margin-top:8px;width:100%;padding:10px;font-size:14px" onclick="autoLinkDrive()">🔗 קשר אוטומטית לתיקיות בדרייב</button>
     <button class="inv-btn add" style="margin-top:8px;width:100%;padding:10px;font-size:14px;background:#fff3e0;color:#8a4b00;border-color:#f0b060" onclick="cleanDuplicates()">🧹 ניקוי כפילויות (חד-פעמי)</button>
     <label class="inv-btn add" style="margin-top:8px;width:100%;padding:10px;font-size:14px;display:block;text-align:center;box-sizing:border-box;cursor:pointer">📥 ייבוא חשבוניות מהדרייב (קובץ מ-Claude)<input type="file" accept=".json,application/json" style="display:none" onchange="if(this.files[0])importDriveFile(this.files[0]);this.value=''"></label>
@@ -1061,12 +1068,19 @@ function renderList(fillSuppliers) {
   }
   const q = document.getElementById('ls-search').value.trim();
   const sup = supSel.value;
-  const searching = !!(q || sup) && !_lsYearTouched;
-  const year = searching ? '' : yearSel.value;
+  const rFrom = document.getElementById('ls-from').value, rTo = document.getElementById('ls-to').value;
+  const ranged = !!(rFrom || rTo);
+  document.getElementById('ls-range-clear').style.display = ranged ? '' : 'none';
+  const searching = !ranged && !!(q || sup) && !_lsYearTouched;
+  const year = (searching || ranged) ? '' : yearSel.value;
+  const inRange = x => { if (!ranged) return true; const m = String(x.date || '').slice(0, 7); if (!m) return false;
+    const a = rFrom && rTo && rFrom > rTo ? rTo : rFrom, b = rFrom && rTo && rFrom > rTo ? rFrom : rTo;
+    return (!a || m >= a) && (!b || m <= b); };
+  const mmYY = v => v ? v.slice(5, 7) + '/' + v.slice(2, 4) : '';
   const flt = document.getElementById('ls-filter').value;
   let list = invs.map((x, i) => ({ x, i })).filter(({ x }) =>
     (!sup || x.sup === sup) &&
-    (!year || yearOf(x) === year) &&
+    (!year || yearOf(x) === year) && inRange(x) &&
     (!q || String(x.sup || '').includes(q) || String(x.num || '').includes(q)) &&
     (flt !== 'nofolder' || !x._driveFolder) &&
     (flt !== 'unpaid' || !x.paid) &&
@@ -1076,7 +1090,7 @@ function renderList(fillSuppliers) {
   const vatSum = list.reduce((t, { x }) => t + vatOf(x), 0);
   const noFolder = list.filter(({ x }) => !x._driveFolder).length;
   const nis = v => '₪' + Math.round(v).toLocaleString('he-IL');
-  document.getElementById('ls-summary').innerHTML = `${searching ? '🔎 תוצאות חיפוש מכל השנים: ' : (year ? year + ': ' : '')}${list.length} חשבוניות${noFolder ? ` · ${noFolder} בלי קישור לדרייב` : ''}
+  document.getElementById('ls-summary').innerHTML = `${ranged ? `📅 ${rFrom ? mmYY(rFrom) : 'מההתחלה'} עד ${rTo ? mmYY(rTo) : 'היום'}: ` : searching ? '🔎 תוצאות חיפוש מכל השנים: ' : (year ? year + ': ' : '')}${list.length} חשבוניות${noFolder ? ` · ${noFolder} בלי קישור לדרייב` : ''}
     <div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:8px;font-size:14px">
       <span style="background:rgba(255,255,255,.08);border-radius:8px;padding:6px 10px">כולל מע"מ: <b>${nis(total)}</b></span>
       <span style="background:rgba(255,255,255,.08);border-radius:8px;padding:6px 10px">לפני מע"מ: <b>${nis(total - vatSum)}</b></span>
