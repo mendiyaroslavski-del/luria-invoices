@@ -1096,7 +1096,7 @@ function fixBenski() {
     if (ch) localStorage.setItem('li2', JSON.stringify(invs));
   } catch (e) {}
 }
-// ברירת מחדל: השנה הנוכחית. בחיפוש (טקסט או ספק) — מכל השנים, אלא אם בחרת שנה בעצמך
+// ברירת מחדל: השנה הנוכחית (גם כשבוחרים ספק). בחיפוש טקסט — מכל השנים, אלא אם בחרת שנה בעצמך
 let _lsYearTouched = false, _lsYearInit = false;
 function renderList(fillSuppliers) {
   fixBenski(); applyDrivePatches();
@@ -1126,7 +1126,7 @@ function renderList(fillSuppliers) {
   const rFrom = document.getElementById('ls-from').value, rTo = document.getElementById('ls-to').value;
   const ranged = !!(rFrom || rTo);
   document.getElementById('ls-range-clear').style.display = ranged ? '' : 'none';
-  const searching = !ranged && !!(q || sup) && !_lsYearTouched;
+  const searching = !ranged && !!q && !_lsYearTouched; // בחירת ספק נשארת בשנה הנוכחית; רק חיפוש טקסט מחפש בכל השנים
   const year = (searching || ranged) ? '' : yearSel.value;
   const inRange = x => { if (!ranged) return true; const m = String(x.date || '').slice(0, 7); if (!m) return false;
     const a = rFrom && rTo && rFrom > rTo ? rTo : rFrom, b = rFrom && rTo && rFrom > rTo ? rFrom : rTo;
