@@ -394,6 +394,7 @@ h1 { font-size: 24px; font-weight: 900; color: var(--gold); }
     <button class="inv-btn add" style="margin-top:8px;width:100%;padding:10px;font-size:14px" onclick="autoLinkDrive()">🔗 קשר אוטומטית לתיקיות בדרייב</button>
     <button class="inv-btn add" style="margin-top:8px;width:100%;padding:10px;font-size:14px;background:#fff3e0;color:#8a4b00;border-color:#f0b060" onclick="cleanDuplicates()">🧹 ניקוי כפילויות (חד-פעמי)</button>
     <label class="inv-btn add" style="margin-top:8px;width:100%;padding:10px;font-size:14px;display:block;text-align:center;box-sizing:border-box;cursor:pointer">📥 ייבוא חשבוניות מהדרייב (קובץ מ-Claude)<input type="file" accept=".json,application/json" style="display:none" onchange="if(this.files[0])importDriveFile(this.files[0]);this.value=''"></label>
+    <button id="ls-intfix" class="inv-btn add" style="display:none;margin-top:8px;width:100%;padding:10px;font-size:14px;background:#fff3e0;color:#8a4b00;border-color:#f0b060" onclick="applyInterestFix()">🔧 תיקון חשבוניות ריבית של עמיר</button>
     <div id="ls-supbox"></div>
   </div>
   <div id="ls-dupbar"></div>
@@ -1001,6 +1002,59 @@ window.addEventListener('luria-data-changed', _refreshListIfOpen);
 document.addEventListener('visibilitychange', () => { if (!document.hidden) _refreshListIfOpen(); });
 
 // ---- Invoices list ----
+// ---- תיקון ריביות עמיר (נובמבר 2026) ----
+// ריבית נספרת כ"תעודה" כדי שתיכנס לרכישות של עמיר (חשבונית ישירה לא נספרת כשיש לספק תעודות באותה שנה)
+const INT_FOLDER = 'https://drive.google.com/drive/folders/1Qa6EyE-nLBcKWcVoDun5O8dVmJ-SnteC';
+const INT_ADD = [
+  { num: 'SI86250700046', date: '2025-03-31', net: 8313.54, vat: 1496.44, total: 9809.98, file: '1Z5LOXb4MRLtp6qZYQApFRDIkaxsG8OdO', note: 'ריבית פיגורים עד 31/12/2024' },
+  { num: 'SI86250700217', date: '2025-12-31', net: 7954.67, vat: 1431.84, total: 9386.51, file: '1Sc4bvA_7MVPA3cUbfYbSMLyk9At5Q1_l', note: 'ריבית פיגורים עד 30/09/2025' },
+];
+const INT_DEL_REMOVE = ['1793776310789.1785', '1793776335756.7502'];          // תעודות ריבית כפולות
+const INT_DEL_CLEAN = ['1793746167496.4248', '1793746235520.9226', '1793776360191.4543']; // להוריד שורת "שירות/הובלה ₪3"
+const INT_LINKS = { SI8626070000047: ['1793746235520.9226'], SI8626070000142: ['1793746167496.4248'] };
+function planInterestFix() {
+  const invs = LF('li2'), dels = LF('ld2'), exps = LF('lex2'); const ch = [];
+  dels.forEach(d => { const id = String(d.id);
+    if (INT_DEL_REMOVE.includes(id)) ch.push(`מחיקת תעודת ריבית כפולה (${d.date}, ₪${(d.items || []).reduce((a, i) => a + (+i.totalV || 0), 0).toFixed(2)})`);
+    if (INT_DEL_CLEAN.includes(id) && (d.items || []).some(i => i.product === 'שירות/הובלה' && +i.price === 3)) ch.push(`הסרת שורת "שירות/הובלה ₪3" מתעודת ריבית ${d.invNum || ''}`);
+    if (id === '1793776360191.4543' && d.date !== '2026-03-31') ch.push('תעודת ריבית SI8626070000017 עוברת לתאריך החשבונית 31/03/2026');
+    if (id === '1793746167496.4248' && !d.doc) ch.push('תעודת ריבית SI8626070000142 מקבלת שם "ריבית פיגורים"');
+  });
+  Object.entries(INT_LINKS).forEach(([n, ids]) => { const x = invs.find(i => i.num === n);
+    if (x && JSON.stringify((x.docIds || []).map(String)) !== JSON.stringify(ids)) ch.push(`סידור הקישורים של חשבונית ${n}`); });
+  if (exps.some(e => String(e.notes || '').includes('SI8626070000017'))) ch.push('מחיקת ההוצאה הכפולה של ריבית SI8626070000017 (₪7,243.89 — כבר נספרת ברכישות)');
+  INT_ADD.forEach(a => { if (!invs.some(x => canonNum(x.num) === a.num)) ch.push(`הוספת חשבונית ריבית ${a.num} מ-${a.date.split('-').reverse().join('/')} — ₪${a.total.toLocaleString('he-IL')}`); });
+  return ch;
+}
+function applyInterestFix() {
+  const ch = planInterestFix(); if (!ch.length) { alert('✅ חשבוניות הריבית כבר מסודרות.'); renderList(); return; }
+  if (!confirm('תיקון חשבוניות ריבית של עמיר:\n\n• ' + ch.join('\n• ') + '\n\nלפני התיקון יורד קובץ גיבוי. להמשיך?')) return;
+  let invs = LF('li2'), dels = LF('ld2'), exps = LF('lex2');
+  try { const b = new Blob([JSON.stringify({ li2: invs, ld2: dels, lex2: exps, at: new Date().toISOString() })], { type: 'application/json' }); const a = document.createElement('a'); a.href = URL.createObjectURL(b); a.download = 'backup-before-interest-fix.json'; a.click(); } catch (e) {}
+  dels = dels.filter(d => !INT_DEL_REMOVE.includes(String(d.id)));
+  dels.forEach(d => { const id = String(d.id);
+    if (INT_DEL_CLEAN.includes(id)) d.items = (d.items || []).filter(i => !(i.product === 'שירות/הובלה' && +i.price === 3));
+    if (id === '1793776360191.4543') { d.date = '2026-03-31'; d.year = '2026'; }
+    if (id === '1793746167496.4248' && !d.doc) d.doc = 'ריבית פיגורים';
+  });
+  invs.forEach(x => { if (INT_LINKS[x.num]) x.docIds = INT_LINKS[x.num].slice(); });
+  exps = exps.filter(e => !String(e.notes || '').includes('SI8626070000017'));
+  const stamp = new Date().toISOString();
+  INT_ADD.forEach(a => {
+    if (invs.some(x => canonNum(x.num) === a.num)) return;
+    const did = uid(), y = a.date.slice(0, 4);
+    dels.push({ id: did, sup: 'עמיר', date: a.date, doc: 'ריבית פיגורים', year: y, invNum: a.num, ts: Date.now(),
+      items: [{ id: 'it' + uid(), product: 'ריבית פיגורים', qty: 1, price: a.net, discount: 0, total: a.net, vat: a.vat, totalV: a.total, cat: null }] });
+    invs.push({ id: uid(), num: a.num, sup: 'עמיר', date: a.date, month: +a.date.slice(5, 7), year: y, total: a.total, vat: a.vat,
+      docIds: [String(did)], paid: false, paidDate: '', notes: a.note,
+      _driveFile: `https://drive.google.com/file/d/${a.file}/view`, _driveFolder: INT_FOLDER, _sortedAt: stamp });
+  });
+  localStorage.setItem('ld2', JSON.stringify(dels));
+  localStorage.setItem('li2', JSON.stringify(invs));
+  localStorage.setItem('lex2', JSON.stringify(exps));
+  renderList(true);
+  alert('✅ חשבוניות הריבית של עמיר סודרו.\nהשינוי נשמר בענן ויופיע גם במערכת הגדולה.');
+}
 function toggleSupplierVat() {
   const sup = document.getElementById('ls-sup').value; if (!sup) return;
   const invs = LF('li2');
@@ -1046,6 +1100,7 @@ function fixBenski() {
 let _lsYearTouched = false, _lsYearInit = false;
 function renderList(fillSuppliers) {
   fixBenski(); applyDrivePatches();
+  try { document.getElementById('ls-intfix').style.display = planInterestFix().length ? '' : 'none'; } catch (e) {}
   const e = s => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;');
   const invs = LF('li2');
   const supSel = document.getElementById('ls-sup');
