@@ -507,6 +507,8 @@ h1 { font-size: 24px; font-weight: 900; color: var(--gold); }
       <input type="month" class="field-input" id="ls-to" style="flex:1;min-width:120px;margin:0" onchange="renderList()">
       <button class="inv-btn" id="ls-range-clear" style="display:none" onclick="document.getElementById('ls-from').value='';document.getElementById('ls-to').value='';renderList()">✕ נקה</button>
     </div>
+    <button class="inv-btn" style="margin-top:8px;width:100%;padding:11px;font-size:15px;font-weight:700;background:#c9a84c;color:#0f2118;border-color:#c9a84c" onclick="openReport()">📊 הפקת דוח חודשי / שנתי</button>
+    <div id="rp-box" style="display:none;margin-top:8px;padding:12px;border-radius:12px;border:1px solid rgba(201,168,76,.4);background:rgba(201,168,76,.06);font-size:14px"></div>
     <button class="inv-btn add" style="margin-top:8px;width:100%;padding:10px;font-size:14px" onclick="autoLinkDrive()">🔗 קשר אוטומטית לתיקיות בדרייב</button>
     <button class="inv-btn add" style="margin-top:8px;width:100%;padding:10px;font-size:14px;background:#fff3e0;color:#8a4b00;border-color:#f0b060" onclick="cleanDuplicates()">🧹 ניקוי כפילויות (חד-פעמי)</button>
     <label class="inv-btn add" style="margin-top:8px;width:100%;padding:10px;font-size:14px;display:block;text-align:center;box-sizing:border-box;cursor:pointer">📥 ייבוא חשבוניות מהדרייב (קובץ מ-Claude)<input type="file" accept=".json,application/json" style="display:none" onchange="if(this.files[0])importDriveFile(this.files[0]);this.value=''"></label>
@@ -1233,6 +1235,102 @@ function fixBenski() {
 }
 // ברירת מחדל: השנה הנוכחית (גם כשבוחרים ספק). בחיפוש טקסט — מכל השנים, אלא אם בחרת שנה בעצמך
 let _lsYearTouched = false, _lsYearInit = false;
+// ═══ דוח חודשי / שנתי (PDF להדפסה) ═══
+function openReport() {
+  const box = document.getElementById('rp-box');
+  if (box.style.display !== 'none') { box.style.display = 'none'; return; }
+  const invs = LF('li2');
+  const years = [...new Set(invs.map(yearOf).filter(Boolean))].sort().reverse();
+  const now = new Date(); const pm = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+  const lastM = pm.getFullYear() + '-' + String(pm.getMonth() + 1).padStart(2, '0');
+  const sups = [...new Set(invs.map(x => String(x.sup || '').trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'he'));
+  const e = s => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;');
+  box.innerHTML = `
+    <div style="display:flex;gap:6px;margin-bottom:10px">
+      <label style="flex:1;text-align:center;padding:8px;border-radius:8px;border:1px solid rgba(255,255,255,.2);cursor:pointer"><input type="radio" name="rp-t" value="m" checked onchange="rpType()"> חודשי</label>
+      <label style="flex:1;text-align:center;padding:8px;border-radius:8px;border:1px solid rgba(255,255,255,.2);cursor:pointer"><input type="radio" name="rp-t" value="y" onchange="rpType()"> שנתי</label>
+    </div>
+    <div id="rp-m"><input type="month" class="field-input" id="rp-month" value="${lastM}" style="width:100%;margin:0"></div>
+    <div id="rp-y" style="display:none"><select class="field-input" id="rp-year" style="width:100%;margin:0">${years.map(y => `<option>${y}</option>`).join('')}</select></div>
+    <select class="field-input" id="rp-sup" style="width:100%;margin:8px 0 0"><option value="">כל הספקים</option>${sups.map(s => `<option value="${e(s)}">${e(s)}</option>`).join('')}</select>
+    <label style="display:flex;gap:8px;align-items:center;margin-top:10px"><input type="checkbox" id="rp-list" checked> כולל רשימה מפורטת של כל החשבוניות</label>
+    <label style="display:flex;gap:8px;align-items:center;margin-top:6px"><input type="checkbox" id="rp-unpaid"> רק חשבוניות שלא שולמו</label>
+    <button class="inv-btn" style="margin-top:12px;width:100%;padding:10px;font-size:15px;font-weight:700;background:#c9a84c;color:#0f2118;border-color:#c9a84c" onclick="makeReport()">📄 הפק דוח</button>
+    <div style="font-size:12px;opacity:.7;margin-top:6px">הדוח נפתח בחלון חדש — בטלפון בוחרים "שמור כ-PDF" במקום מדפסת.</div>`;
+  box.style.display = '';
+}
+function rpType() {
+  const y = document.querySelector('input[name=rp-t]:checked').value === 'y';
+  document.getElementById('rp-m').style.display = y ? 'none' : '';
+  document.getElementById('rp-y').style.display = y ? '' : 'none';
+}
+function makeReport() {
+  const yearly = document.querySelector('input[name=rp-t]:checked').value === 'y';
+  const month = document.getElementById('rp-month').value, year = document.getElementById('rp-year').value;
+  const sup = document.getElementById('rp-sup').value;
+  const withList = document.getElementById('rp-list').checked, onlyUnpaid = document.getElementById('rp-unpaid').checked;
+  if (!yearly && !month) { alert('בחר חודש'); return; }
+  const HEB_M = ['ינואר', 'פברואר', 'מרץ', 'אפריל', 'מאי', 'יוני', 'יולי', 'אוגוסט', 'ספטמבר', 'אוקטובר', 'נובמבר', 'דצמבר'];
+  const per = yearly ? year : month;
+  const list = LF('li2').filter(x => String(x.date || '').startsWith(per) && (!sup || String(x.sup || '').trim() === sup) && (!onlyUnpaid || !x.paid))
+    .sort((a, b) => String(a.date || '').localeCompare(String(b.date || '')) || String(a.sup || '').localeCompare(String(b.sup || ''), 'he'));
+  if (!list.length) { alert('אין חשבוניות בתקופה שנבחרה'); return; }
+  const e = s => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;');
+  const m2 = v => (v < 0 ? '-' : '') + '₪' + Math.abs(v).toLocaleString('he-IL', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const m0 = v => (v < 0 ? '-' : '') + '₪' + Math.round(Math.abs(v)).toLocaleString('he-IL');
+  const dmy = d => d ? String(d).slice(0, 10).split('-').reverse().join('/') : '';
+  const T = x => Number(x.total) || 0;
+  const agg = arr => { const t = arr.reduce((s, x) => s + T(x), 0), v = arr.reduce((s, x) => s + vatOf(x), 0), u = arr.filter(x => !x.paid).reduce((s, x) => s + T(x), 0); return { n: arr.length, t, v, b: t - v, u, un: arr.filter(x => !x.paid).length }; };
+  const A = agg(list);
+  const title = yearly ? `דוח חשבוניות ספקים — שנת ${year}` : `דוח חשבוניות ספקים — ${HEB_M[+month.slice(5, 7) - 1]} ${month.slice(0, 4)}`;
+  const sub = [sup ? 'ספק: ' + sup : 'כל הספקים', onlyUnpaid ? 'רק שלא שולמו' : ''].filter(Boolean).join(' · ');
+  const box = (val, lab, col) => `<div class="bx"><div class="v" style="color:${col || '#1b5e20'}">${val}</div><div class="l">${lab}</div></div>`;
+  let h = `<div class="boxes">${box(A.n, 'חשבוניות')}${box(m0(A.b), 'לפני מע"מ')}${box(m0(A.v), 'מע"מ (חוזר לעסק)', '#1565c0')}${box(m0(A.t), 'סה"כ כולל מע"מ', '#0f2118')}${box(A.un ? m0(A.u) + `<small> (${A.un})</small>` : '✓', 'טרם שולם', A.un ? '#c62828' : '#2e7d32')}</div>`;
+  if (yearly) {
+    const rows = HEB_M.map((nm, i) => { const k = year + '-' + String(i + 1).padStart(2, '0'); const a = agg(list.filter(x => String(x.date).startsWith(k))); return { nm, a }; }).filter(r => r.a.n);
+    h += `<h2>לפי חודש</h2><table><thead><tr><th>חודש</th><th class="n">חשבוניות</th><th class="n">לפני מע"מ</th><th class="n">מע"מ</th><th class="n">כולל מע"מ</th><th class="n">טרם שולם</th></tr></thead><tbody>
+      ${rows.map(r => `<tr><td>${r.nm}</td><td class="n">${r.a.n}</td><td class="n">${m2(r.a.b)}</td><td class="n">${m2(r.a.v)}</td><td class="n b">${m2(r.a.t)}</td><td class="n" style="color:${r.a.u ? '#c62828' : '#999'}">${r.a.u ? m2(r.a.u) : '—'}</td></tr>`).join('')}
+      <tr class="tot"><td>סה"כ</td><td class="n">${A.n}</td><td class="n">${m2(A.b)}</td><td class="n">${m2(A.v)}</td><td class="n">${m2(A.t)}</td><td class="n">${A.u ? m2(A.u) : '—'}</td></tr></tbody></table>`;
+  }
+  if (!sup) {
+    const by = {}; list.forEach(x => { const k = String(x.sup || '—').trim(); (by[k] = by[k] || []).push(x); });
+    const rows = Object.entries(by).map(([k, arr]) => ({ k, a: agg(arr) })).sort((p, q) => q.a.t - p.a.t);
+    h += `<h2>לפי ספק</h2><table><thead><tr><th>ספק</th><th class="n">חשבוניות</th><th class="n">לפני מע"מ</th><th class="n">מע"מ</th><th class="n">כולל מע"מ</th><th class="n">טרם שולם</th></tr></thead><tbody>
+      ${rows.map(r => `<tr><td>${e(r.k)}</td><td class="n">${r.a.n}</td><td class="n">${m2(r.a.b)}</td><td class="n">${m2(r.a.v)}</td><td class="n b">${m2(r.a.t)}</td><td class="n" style="color:${r.a.u ? '#c62828' : '#999'}">${r.a.u ? m2(r.a.u) : '—'}</td></tr>`).join('')}
+      <tr class="tot"><td>סה"כ</td><td class="n">${A.n}</td><td class="n">${m2(A.b)}</td><td class="n">${m2(A.v)}</td><td class="n">${m2(A.t)}</td><td class="n">${A.u ? m2(A.u) : '—'}</td></tr></tbody></table>`;
+  }
+  if (withList) {
+    h += `<h2>פירוט חשבוניות</h2><table class="sm"><thead><tr><th>תאריך</th><th>ספק</th><th>מס' חשבונית</th><th class="n">לפני מע"מ</th><th class="n">מע"מ</th><th class="n">כולל מע"מ</th><th>סטטוס</th></tr></thead><tbody>
+      ${list.map(x => { const t = T(x), v = vatOf(x); return `<tr><td>${dmy(x.date)}</td><td>${e(x.sup)}</td><td dir="ltr" style="text-align:right">${e(x.num)}${t < 0 ? ' <small>(זיכוי)</small>' : ''}</td><td class="n">${m2(t - v)}</td><td class="n">${v === 0 && t ? '<small>ללא</small>' : m2(v)}</td><td class="n b">${m2(t)}</td><td style="color:${x.paid ? '#2e7d32' : '#c62828'}">${x.paid ? 'שולמה' + (x.paidDate ? ' ' + dmy(x.paidDate) : '') : 'לא שולמה'}</td></tr>`; }).join('')}
+      <tr class="tot"><td colspan="3">סה"כ ${A.n} חשבוניות</td><td class="n">${m2(A.b)}</td><td class="n">${m2(A.v)}</td><td class="n">${m2(A.t)}</td><td></td></tr></tbody></table>`;
+  }
+  const doc = `<!DOCTYPE html><html lang="he" dir="rtl"><head><meta charset="UTF-8"><title>${e(title)}</title>
+  <style>
+    @page{size:A4;margin:12mm}*{box-sizing:border-box}body{font-family:Arial,'Heebo',sans-serif;color:#222;margin:0;padding:16px;font-size:12px}
+    .hd{display:flex;justify-content:space-between;align-items:flex-end;border-bottom:3px solid #1b5e20;padding-bottom:8px;margin-bottom:12px}
+    .hd h1{margin:0;font-size:20px;color:#1b5e20}.hd .co{font-size:12px;color:#555;text-align:left;line-height:1.5}
+    .sub{font-size:12px;color:#666;margin:-6px 0 12px}
+    .boxes{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px}.bx{flex:1;min-width:110px;border:1.5px solid #c8e6c9;border-radius:8px;padding:8px;text-align:center;background:#f9fdf9}
+    .bx .v{font-size:16px;font-weight:800}.bx .l{font-size:11px;color:#666;margin-top:2px}.bx small{font-size:11px;font-weight:400}
+    h2{font-size:14px;color:#1b5e20;margin:16px 0 6px;border-right:4px solid #c9a84c;padding-right:8px}
+    table{width:100%;border-collapse:collapse;margin-bottom:6px}th{background:#1b5e20;color:#fff;font-weight:600;padding:6px 5px;font-size:11px;text-align:right}
+    td{padding:5px;border-bottom:1px solid #e0e0e0;vertical-align:top}tr:nth-child(even) td{background:#f7f7f7}
+    .n{text-align:left;white-space:nowrap;direction:ltr}.b{font-weight:700}.tot td{background:#e8f5e9!important;font-weight:800;border-top:2px solid #1b5e20}
+    table.sm td{font-size:11px;padding:4px 5px}tr{page-break-inside:avoid}
+    .ft{margin-top:14px;font-size:10px;color:#888;text-align:center}
+    @media print{.noprint{display:none}body{padding:0}}
+    .noprint{position:sticky;top:0;background:#fff;padding:8px 0;text-align:center}.noprint button{font-size:15px;padding:8px 18px;border-radius:8px;border:none;background:#1b5e20;color:#fff;margin:0 4px}
+  </style></head><body>
+  <div class="noprint"><button onclick="print()">🖨️ הדפס / שמור PDF</button><button onclick="close()" style="background:#777">סגור</button></div>
+  <div class="hd"><div><h1>${e(title)}</h1></div><div class="co"><b>אתרוגי לוריא בע"מ</b> · ח.פ. 516151610<br>הופק: ${dmy(new Date().toISOString())}</div></div>
+  <div class="sub">${e(sub)} · הסכומים בש"ח. המע"מ לפי פירוט החשבונית, ואם אין פירוט — לפי שיעור המע"מ באותה שנה.</div>
+  ${h}<div class="ft">הופק ממערכת החשבוניות של אתרוגי לוריא</div>
+  <script>setTimeout(function(){try{print()}catch(e){}},500)<\/script></body></html>`;
+  const w = window.open('', '_blank');
+  if (!w) { alert('הדפדפן חסם את החלון. אפשר חלונות קופצים ונסה שוב.'); return; }
+  w.document.open(); w.document.write(doc); w.document.close();
+}
+
 function renderList(fillSuppliers) {
   fixBenski(); applyDrivePatches();
   try { document.getElementById('ls-intfix').style.display = planInterestFix().length ? '' : 'none'; } catch (e) {}
