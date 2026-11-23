@@ -515,6 +515,7 @@ h1 { font-size: 24px; font-weight: 900; color: var(--gold); }
     <button id="ls-intfix" class="inv-btn add" style="display:none;margin-top:8px;width:100%;padding:10px;font-size:14px;background:#fff3e0;color:#8a4b00;border-color:#f0b060" onclick="applyInterestFix()">🔧 תיקון חשבוניות ריבית של עמיר</button>
     <div id="ls-supbox"></div>
   </div>
+  <div id="ls-trash"></div>
   <div id="ls-dupbar"></div>
   <div id="ls-summary" class="results-title"></div>
   <div id="ls-rows"></div>
@@ -744,11 +745,14 @@ async function analyzeInvoice(file) {
         { type: 'text', text: `זה מסמך שהתקבל אצל "אתרוגי לוריא" (הלקוח). נתח אותו והחזר JSON בלבד, בלי שום טקסט נוסף:
 {
   "supplier": "שם העסק שהנפיק את המסמך — לא אתרוגי לוריא",
+  "issuedByLuria": "true אם את המסמך הנפיקה אתרוגי לוריא בע\\"מ (ח.פ. 516151610) — למשל חשבונית / זיכוי / קבלה שאנחנו הוצאנו ללקוח, גם אם הוחזר חתום. אחרת false",
+  "issuerId": "ח.פ. / עוסק מורשה של מי שהנפיק את המסמך, או null",
   "knownSupplier": "אם זה אחד מהספקים ברשימה למטה — השם בדיוק כפי שהוא ברשימה, אחרת null",
   "docType": ${DOC_TYPES.map(t => '"' + t + '"').join(' | ')},
   "docNumber": "מספר המסמך. אם יש בו אותיות לטיניות (כמו SI) — כתוב אותן לפני הספרות, למשל SI26607000567",
   "date": "תאריך המסמך בפורמט YYYY-MM-DD",
   "amount": "הסכום הסופי לתשלום כולל מע\\"מ — מספר בלבד",
+  "allocationNumber": "מספר הקצאה של רשות המסים (בדרך כלל 9 ספרות, מופיע ליד 'מספר הקצאה' / 'מס' הקצאה') — ספרות בלבד, או null",
   "forInvoice": "אם זו קבלה: מספר החשבונית שהיא משלמת, אחרת null"
 }
 רשימת הספקים הקיימים: ${sups.join(' | ')}` }
@@ -806,7 +810,14 @@ const vatOf = x => {
 const r2 = x => Math.round(x * 100) / 100;
 
 // ---- Write into the big system, in exactly its own format ----
+function isOwnDoc(info) {
+  const t = v => String(v == null ? '' : v);
+  return info.issuedByLuria === true || t(info.issuedByLuria) === 'true' || /516151610/.test(t(info.issuerId).replace(/\D/g, '')) ||
+    /לוריא|luria/i.test(t(info.supplier));
+}
+function allocOf(v) { const d = String(v == null ? '' : v).replace(/\D/g, ''); return d.length >= 6 && d.length <= 12 ? d : ''; }
 function syncToLuriaFarm(info, docType, srcFile) {
+  if (isOwnDoc(info)) return { status: 'own' };
   try {
     const saveF = (k, v) => localStorage.setItem(k, JSON.stringify(v));
     const date = info.date || '';
@@ -844,7 +855,8 @@ function syncToLuriaFarm(info, docType, srcFile) {
         paid: paidNow,
         paidDate: paidNow ? date : '',
         _fromInvoiceSorter: true, _srcFile: srcFile || '', _sortedAt: stamp,
-        ...(info.driveFolder ? { _driveFolder: info.driveFolder } : {})
+        ...(info.driveFolder ? { _driveFolder: info.driveFolder } : {}),
+        ...(allocOf(info.allocationNumber) ? { alloc: allocOf(info.allocationNumber) } : {})
       };
       invs.push(rec);
       saveF('li2', invs);
@@ -1235,6 +1247,72 @@ function fixBenski() {
 }
 // ברירת מחדל: השנה הנוכחית (גם כשבוחרים ספק). בחיפוש טקסט — מכל השנים, אלא אם בחרת שנה בעצמך
 let _lsYearTouched = false, _lsYearInit = false;
+function setAlloc(i) {
+  const invs = LF('li2'); const x = invs[i]; if (!x) return;
+  const v = prompt(`מספר הקצאה לחשבונית ${x.num} של ${x.sup}:\n(ריק = מחיקה)`, x.alloc || '');
+  if (v === null) return;
+  const a = allocOf(v);
+  if (v.trim() && !a) { alert('מספר הקצאה צריך להיות 6–12 ספרות'); return; }
+  if (a) x.alloc = a; else delete x.alloc;
+  localStorage.setItem('li2', JSON.stringify(invs));
+  renderList();
+}
+function trashLF() { try { return JSON.parse(localStorage.getItem('li2_trash') || '[]'); } catch (e) { return []; } }
+function deleteInvoice(i) {
+  const invs = LF('li2'); const x = invs[i]; if (!x) return;
+  const dels = LF('ld2'), exps = LF('lex2');
+  const isLinked = d => String(d.invNum || '') === String(x.num) && (!d.sup || !x.sup || d.sup === x.sup);
+  const linkedDelIds = dels.filter(isLinked).map(d => d.id);
+  const linkedExp = exps.filter(ex => String(ex._invId) === String(x.id));
+  const what = (Number(x.total) < 0 ? 'חשבונית הזיכוי' : 'החשבונית') + ` ${x.num} של ${x.sup} (₪${(Number(x.total) || 0).toLocaleString()})`;
+  const ans = prompt(`🗑 מחיקת ${what}\n\n` +
+    (linkedDelIds.length ? `${linkedDelIds.length} תעודות משלוח מקושרות יישארו במערכת, רק בלי השיוך לחשבונית.\n` : '') +
+    (linkedExp.length ? `גם ההוצאה הישירה שנוצרה ממנה תימחק.\n` : '') +
+    `הקובץ בדרייב לא נמחק.\n\nכדי לאשר — הקלד את המילה:  מחק`);
+  if (ans === null) return;
+  if (ans.replace(/\s/g, '') !== 'מחק') { alert('לא נמחק — צריך להקליד בדיוק "מחק".'); return; }
+  // שמירה בסל המחזור לפני מחיקה — אפשר לשחזר
+  const trash = trashLF();
+  trash.push({ rec: x, exps: linkedExp, delIds: linkedDelIds, at: Date.now() });
+  localStorage.setItem('li2_trash', JSON.stringify(trash.slice(-30)));
+  dels.forEach(d => { if (isLinked(d)) d.invNum = ''; });
+  if (linkedDelIds.length) localStorage.setItem('ld2', JSON.stringify(dels));
+  if (linkedExp.length) localStorage.setItem('lex2', JSON.stringify(exps.filter(ex => String(ex._invId) !== String(x.id))));
+  invs.splice(i, 1);
+  localStorage.setItem('li2', JSON.stringify(invs));
+  renderList(true);
+}
+function renderTrash() {
+  const el = document.getElementById('ls-trash'); if (!el) return;
+  const t = trashLF();
+  if (!t.length) { el.innerHTML = ''; return; }
+  const last = t[t.length - 1].rec;
+  el.innerHTML = `<div class="folder-guide" style="display:flex;gap:8px;align-items:center;justify-content:space-between;flex-wrap:wrap">
+    <span>🗑 נמחקה לאחרונה: ${String(last.sup || '').replace(/</g, '&lt;')} מס' ${String(last.num || '').replace(/</g, '&lt;')}${t.length > 1 ? ` (ועוד ${t.length - 1} בסל)` : ''}</span>
+    <span><button class="inv-btn add" onclick="restoreInvoice()">↩️ שחזר</button> <button class="inv-btn" onclick="clearTrash()">✕</button></span></div>`;
+}
+function restoreInvoice() {
+  const t = trashLF(); const it = t.pop(); if (!it) return;
+  const invs = LF('li2');
+  if (!invs.some(x => String(x.id) === String(it.rec.id))) invs.push(it.rec);
+  localStorage.setItem('li2', JSON.stringify(invs));
+  if (it.exps && it.exps.length) {
+    const exps = LF('lex2'); it.exps.forEach(ex => { if (!exps.some(y => String(y.id) === String(ex.id))) exps.push(ex); });
+    localStorage.setItem('lex2', JSON.stringify(exps));
+  }
+  if (it.delIds && it.delIds.length) {
+    const dels = LF('ld2'); dels.forEach(d => { if (it.delIds.some(id => String(id) === String(d.id)) && !d.invNum) d.invNum = it.rec.num; });
+    localStorage.setItem('ld2', JSON.stringify(dels));
+  }
+  localStorage.setItem('li2_trash', JSON.stringify(t));
+  renderList(true);
+  alert(`✅ שוחזרה: ${it.rec.sup} מס' ${it.rec.num}`);
+}
+function clearTrash() {
+  if (!confirm('להסתיר את הודעת השחזור? (לא ניתן יהיה לשחזר את מה שנמחק)')) return;
+  localStorage.removeItem('li2_trash'); renderTrash();
+}
+
 // ═══ דוח חודשי / שנתי (PDF להדפסה) ═══
 function openReport() {
   const box = document.getElementById('rp-box');
@@ -1300,9 +1378,9 @@ function makeReport() {
       <tr class="tot"><td>סה"כ</td><td class="n">${A.n}</td><td class="n">${m2(A.b)}</td><td class="n">${m2(A.v)}</td><td class="n">${m2(A.t)}</td><td class="n">${A.u ? m2(A.u) : '—'}</td></tr></tbody></table>`;
   }
   if (withList) {
-    h += `<h2>פירוט חשבוניות</h2><table class="sm"><thead><tr><th>תאריך</th><th>ספק</th><th>מס' חשבונית</th><th class="n">לפני מע"מ</th><th class="n">מע"מ</th><th class="n">כולל מע"מ</th><th>סטטוס</th></tr></thead><tbody>
-      ${list.map(x => { const t = T(x), v = vatOf(x); return `<tr><td>${dmy(x.date)}</td><td>${e(x.sup)}</td><td dir="ltr" style="text-align:right">${e(x.num)}${t < 0 ? ' <small>(זיכוי)</small>' : ''}</td><td class="n">${m2(t - v)}</td><td class="n">${v === 0 && t ? '<small>ללא</small>' : m2(v)}</td><td class="n b">${m2(t)}</td><td style="color:${x.paid ? '#2e7d32' : '#c62828'}">${x.paid ? 'שולמה' + (x.paidDate ? ' ' + dmy(x.paidDate) : '') : 'לא שולמה'}</td></tr>`; }).join('')}
-      <tr class="tot"><td colspan="3">סה"כ ${A.n} חשבוניות</td><td class="n">${m2(A.b)}</td><td class="n">${m2(A.v)}</td><td class="n">${m2(A.t)}</td><td></td></tr></tbody></table>`;
+    h += `<h2>פירוט חשבוניות</h2><table class="sm"><thead><tr><th>תאריך</th><th>ספק</th><th>מס' חשבונית</th><th>מס' הקצאה</th><th class="n">לפני מע"מ</th><th class="n">מע"מ</th><th class="n">כולל מע"מ</th><th>סטטוס</th></tr></thead><tbody>
+      ${list.map(x => { const t = T(x), v = vatOf(x); return `<tr><td>${dmy(x.date)}</td><td>${e(x.sup)}</td><td dir="ltr" style="text-align:right">${e(x.num)}${t < 0 ? ' <small>(זיכוי)</small>' : ''}</td><td dir="ltr" style="text-align:right">${e(x.alloc || '')}</td><td class="n">${m2(t - v)}</td><td class="n">${v === 0 && t ? '<small>ללא</small>' : m2(v)}</td><td class="n b">${m2(t)}</td><td style="color:${x.paid ? '#2e7d32' : '#c62828'}">${x.paid ? 'שולמה' + (x.paidDate ? ' ' + dmy(x.paidDate) : '') : 'לא שולמה'}</td></tr>`; }).join('')}
+      <tr class="tot"><td colspan="4">סה"כ ${A.n} חשבוניות</td><td class="n">${m2(A.b)}</td><td class="n">${m2(A.v)}</td><td class="n">${m2(A.t)}</td><td></td></tr></tbody></table>`;
   }
   const doc = `<!DOCTYPE html><html lang="he" dir="rtl"><head><meta charset="UTF-8"><title>${e(title)}</title>
   <style>
@@ -1403,12 +1481,15 @@ function renderList(fillSuppliers) {
     <div class="inv-row">
       <div class="inv-main">
         <div class="inv-sup">${e(x.sup || '—')}</div>
-        <div class="inv-sub">${e(x.date || '')} · מס' ${e(x.num || '')} · <span class="${x.paid ? 'badge-paid' : 'badge-unpaid'}">${x.paid ? 'שולמה' : 'לא שולמה'}</span>${x._fromInvoiceSorter ? ' · 📥' : ''}${vatOf(x) === 0 && Number(x.total) ? ' · ללא מע"מ' : (x.vat !== undefined && x.vat !== null && x.vat !== '' ? ` · מע"מ ₪${(+x.vat).toLocaleString('he-IL')}` : '')}</div>
+        <div class="inv-sub">${e(x.date || '')} · מס' ${e(x.num || '')} · <span class="${x.paid ? 'badge-paid' : 'badge-unpaid'}">${x.paid ? 'שולמה' : 'לא שולמה'}</span>${x._fromInvoiceSorter ? ' · 📥' : ''}${x.alloc ? ` · הקצאה <span dir="ltr">${e(x.alloc)}</span>` : ''}${vatOf(x) === 0 && Number(x.total) ? ' · ללא מע"מ' : (x.vat !== undefined && x.vat !== null && x.vat !== '' ? ` · מע"מ ₪${(+x.vat).toLocaleString('he-IL')}` : '')}</div>
       </div>
       <div class="inv-amt">₪${(Number(x.total) || 0).toLocaleString('he-IL', { maximumFractionDigits: 2 })}</div>
       ${x._driveFile ? `<a class="inv-btn" href="${e(x._driveFile)}" target="_blank" rel="noopener">📄 קובץ</a>` : ''}
       ${x._driveFolder ? `<a class="inv-btn" href="${e(x._driveFolder)}" target="_blank" rel="noopener">📁 דרייב</a><button class="inv-btn add" title="שנה קישור" onclick="setInvoiceFolder(${i})">✏️</button>` : `<button class="inv-btn add" onclick="setInvoiceFolder(${i})">➕ קישור</button>`}
+      <button class="inv-btn add" title="מספר הקצאה" onclick="setAlloc(${i})">🔢</button>
+      <button class="inv-btn" title="מחיקת החשבונית" style="border-color:rgba(224,122,95,.5);color:#ffb4a2" onclick="deleteInvoice(${i})">🗑</button>
     </div>`).join('');
+  renderTrash();
   document.getElementById('ls-rows').innerHTML = rows || '<div class="folder-guide" style="text-align:center">אין חשבוניות להצגה</div>';
 }
 // ---- Duplicate invoices (same supplier + same number written differently, e.g. SI123 / 123SI) ----
@@ -1674,6 +1755,7 @@ async function approveAndSync(index, noDownload) {
     noInvoice: warn('ℹ️ החשבונית של הקבלה לא נמצאה במערכת'),
     exists: warn('⚠️ כבר קיים במערכת'),
     notSaved: warn(`ℹ️ "${docType}" לא נשמר במערכת`),
+    own: warn('ℹ️ זה מסמך שהנפיקה אתרוגי לוריא (לא של ספק) — לא נשמר במערכת'),
     error: `<div class="sync-success" style="color:var(--red)">❌ שגיאה בשמירה: ${res.error || ''}</div>`
   })[res.status];
 
