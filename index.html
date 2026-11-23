@@ -395,10 +395,15 @@ h1 { font-size: 24px; font-weight: 900; color: var(--gold); }
 .tabs{display:flex;gap:8px;margin:0 0 16px}
 .tab{flex:1;padding:11px 8px;border-radius:12px;border:1px solid rgba(255,255,255,.12);background:rgba(255,255,255,.04);color:rgba(255,255,255,.7);font-family:'Heebo',sans-serif;font-size:14px;font-weight:600;cursor:pointer}
 .tab.on{background:rgba(201,168,76,.15);border-color:rgba(201,168,76,.5);color:var(--gold-light)}
-.inv-row{background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.08);border-radius:12px;padding:10px 12px;margin-bottom:8px;display:flex;align-items:center;gap:10px}
+.inv-row{background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.08);border-radius:12px;padding:10px 12px;margin-bottom:8px}
+.inv-top{display:flex;align-items:flex-start;gap:10px}
+.inv-acts{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
+.inv-more{display:none;flex-wrap:wrap;gap:6px;width:100%;padding-top:6px;border-top:1px dashed rgba(255,255,255,.1)}
+.inv-row.open .inv-more{display:flex}
+.inv-btn.del{border-color:rgba(224,122,95,.5);background:rgba(224,122,95,.08);color:#ffb4a2}
 .inv-main{flex:1;min-width:0}
 .inv-sup{font-weight:700;font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.inv-sub{font-size:12px;color:rgba(255,255,255,.55);margin-top:2px}
+.inv-sub{font-size:12px;color:rgba(255,255,255,.55);margin-top:2px;line-height:1.6}
 .inv-amt{font-weight:700;font-size:14px;white-space:nowrap;direction:ltr}
 .inv-btn{border:1px solid rgba(82,183,136,.5);background:rgba(82,183,136,.12);color:var(--light);border-radius:8px;padding:6px 10px;font-size:12px;font-family:inherit;cursor:pointer;white-space:nowrap;text-decoration:none}
 .inv-btn.add{border-color:rgba(201,168,76,.5);background:rgba(201,168,76,.1);color:var(--gold)}
@@ -1479,15 +1484,23 @@ function renderList(fillSuppliers) {
   if (renderDupBar()) { renderDups(); return; }
   const rows = list.slice(0, 300).map(({ x, i }) => `
     <div class="inv-row">
+     <div class="inv-top">
       <div class="inv-main">
         <div class="inv-sup">${e(x.sup || '—')}</div>
         <div class="inv-sub">${e(x.date || '')} · מס' ${e(x.num || '')} · <span class="${x.paid ? 'badge-paid' : 'badge-unpaid'}">${x.paid ? 'שולמה' : 'לא שולמה'}</span>${x._fromInvoiceSorter ? ' · 📥' : ''}${x.alloc ? ` · הקצאה <span dir="ltr">${e(x.alloc)}</span>` : ''}${vatOf(x) === 0 && Number(x.total) ? ' · ללא מע"מ' : (x.vat !== undefined && x.vat !== null && x.vat !== '' ? ` · מע"מ ₪${(+x.vat).toLocaleString('he-IL')}` : '')}</div>
       </div>
       <div class="inv-amt">₪${(Number(x.total) || 0).toLocaleString('he-IL', { maximumFractionDigits: 2 })}</div>
+     </div>
+     <div class="inv-acts">
       ${x._driveFile ? `<a class="inv-btn" href="${e(x._driveFile)}" target="_blank" rel="noopener">📄 קובץ</a>` : ''}
-      ${x._driveFolder ? `<a class="inv-btn" href="${e(x._driveFolder)}" target="_blank" rel="noopener">📁 דרייב</a><button class="inv-btn add" title="שנה קישור" onclick="setInvoiceFolder(${i})">✏️</button>` : `<button class="inv-btn add" onclick="setInvoiceFolder(${i})">➕ קישור</button>`}
-      <button class="inv-btn add" title="מספר הקצאה" onclick="setAlloc(${i})">🔢</button>
-      <button class="inv-btn" title="מחיקת החשבונית" style="border-color:rgba(224,122,95,.5);color:#ffb4a2" onclick="deleteInvoice(${i})">🗑</button>
+      ${x._driveFolder ? `<a class="inv-btn" href="${e(x._driveFolder)}" target="_blank" rel="noopener">📁 דרייב</a>` : ''}
+      <button class="inv-btn add" onclick="this.closest('.inv-row').classList.toggle('open')">⋯ עוד</button>
+      <div class="inv-more">
+        <button class="inv-btn add" onclick="setInvoiceFolder(${i})">${x._driveFolder ? '✏️ שינוי קישור' : '➕ קישור לדרייב'}</button>
+        <button class="inv-btn add" onclick="setAlloc(${i})">🔢 מספר הקצאה</button>
+        <button class="inv-btn del" onclick="deleteInvoice(${i})">🗑 מחיקה</button>
+      </div>
+     </div>
     </div>`).join('');
   renderTrash();
   document.getElementById('ls-rows').innerHTML = rows || '<div class="folder-guide" style="text-align:center">אין חשבוניות להצגה</div>';
